@@ -2019,6 +2019,11 @@ class _LyricsHeaderProgress extends ConsumerWidget {
       value: progress,
       color: progressColor,
       animateProgress: timeline.isPlaying,
+      minimumPaintedStep:
+          1 /
+          (MediaQuery.sizeOf(context).width *
+                  MediaQuery.devicePixelRatioOf(context))
+              .clamp(1, double.infinity),
       progressAnimationKey: const ValueKey('lyrics-header-progress-animation'),
       colorAnimationKey: const ValueKey(
         'lyrics-header-progress-color-animation',

@@ -3376,6 +3376,7 @@ class _PersistentCurrentViewsState extends State<_PersistentCurrentViews> {
               ),
               () => SearchView(
                 active: widget.selectedIndex == widget.searchIndex,
+                usesShellBackdrop: true,
                 bottomContentPadding: widget.contentBottomPadding,
                 onOpenPlayer: widget.onOpenPlayer,
                 onAddToPlaylist: widget.onAddRemoteTracksToPlaylist,

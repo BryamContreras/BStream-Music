@@ -1812,32 +1812,40 @@ class _LanguageSelectorDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final options = Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var index = 0; index < AppLanguage.values.length; index++) ...[
+          if (index > 0) const SizedBox(height: 8),
+          _SettingsDialogOption(
+            key: ValueKey(
+              'settings-language-option-${AppLanguage.values[index].name}',
+            ),
+            selected: language == AppLanguage.values[index],
+            icon: Icons.language_rounded,
+            label: AppLanguage.values[index].label,
+            onTap: () => Navigator.of(context).pop(AppLanguage.values[index]),
+          ),
+        ],
+      ],
+    );
+    final standardAndroidText =
+        Theme.of(context).platform == TargetPlatform.android &&
+        MediaQuery.textScalerOf(context).scale(16) <= 16;
     return AppAlertDialog(
       key: const ValueKey('settings-language-dialog'),
       scrollable: true,
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       title: Text(strings.language),
-      content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 420),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (var index = 0; index < AppLanguage.values.length; index++) ...[
-              if (index > 0) const SizedBox(height: 8),
-              _SettingsDialogOption(
-                key: ValueKey(
-                  'settings-language-option-${AppLanguage.values[index].name}',
-                ),
-                selected: language == AppLanguage.values[index],
-                icon: Icons.language_rounded,
-                label: AppLanguage.values[index].label,
-                onTap: () =>
-                    Navigator.of(context).pop(AppLanguage.values[index]),
-              ),
-            ],
-          ],
-        ),
-      ),
+      // At the standard Android text size the seven endonyms fit in Material's
+      // 280 dp minimum, minus its two 24 dp content insets. Giving that width
+      // to the column avoids a second intrinsic pass over every option.
+      content: standardAndroidText
+          ? SizedBox(width: 232, child: options)
+          : ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: options,
+            ),
       actions: [
         TextButton(
           key: const ValueKey('settings-language-cancel'),

@@ -884,6 +884,8 @@ class _MiniPlayerBackgroundFrame extends StatelessWidget {
           blurSigma: 8,
           intensity: LiquidGlassSurface.chromeIntensity,
           materialOpacity: LiquidGlassSurface.chromeOpacity,
+          isolateForeground:
+              Theme.of(context).platform == TargetPlatform.android,
           backdropGroupKey: backdropGroupKey,
           backdropMotion: moving,
           backdropEnvelope: envelope,
@@ -1675,8 +1677,8 @@ class _MiniArtwork extends StatelessWidget {
             Positioned.fill(
               // Position ticks only rebuild and paint this small ring. The
               // artwork underneath keeps its image stream and raster layer.
-              child: RepaintBoundary(
-                child: ExcludeSemantics(child: _MiniArtworkProgressRing()),
+              child: ExcludeSemantics(
+                child: _MiniArtworkProgressRing(diameter: size),
               ),
             ),
           if (isFavorite)
@@ -1692,7 +1694,9 @@ class _MiniArtwork extends StatelessWidget {
 }
 
 class _MiniArtworkProgressRing extends ConsumerWidget {
-  const _MiniArtworkProgressRing();
+  const _MiniArtworkProgressRing({required this.diameter});
+
+  final double diameter;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1714,6 +1718,12 @@ class _MiniArtworkProgressRing extends ConsumerWidget {
         key: const ValueKey('mini-player-artwork-progress-animation'),
         value: timeline.progress,
         animateProgress: timeline.isPlaying,
+        minimumPaintedStep:
+            1 /
+            (diameter * math.pi * MediaQuery.devicePixelRatioOf(context)).clamp(
+              1,
+              double.infinity,
+            ),
         duration: const Duration(milliseconds: 160),
         builder: (context, animatedProgress, _) => CircularProgressIndicator(
           key: const ValueKey('mini-player-artwork-progress-ring'),

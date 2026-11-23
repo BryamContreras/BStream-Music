@@ -27,7 +27,12 @@ uniform float u_shape_mask;
 // Only the navigation droplet opts into a broad convex interior. Other glass
 // surfaces keep zero, retaining their original calm centre and optical cost.
 uniform float u_lens_bulge;
+#ifdef BSTREAM_GRADIENT_BACKDROP
+uniform vec3 u_background_top;
+uniform vec3 u_background_bottom;
+#else
 uniform sampler2D u_backdrop;
+#endif
 
 out vec4 frag_color;
 
@@ -78,6 +83,12 @@ vec2 rounded_rect_normal(
 }
 
 vec4 sample_backdrop(vec2 pixel_coordinate) {
+#ifdef BSTREAM_GRADIENT_BACKDROP
+  // Convolving a linear gradient with a normalized blur preserves its
+  // slope. Sample it in viewport coordinates without a backdrop texture.
+  float t = clamp((pixel_coordinate.y + u_size.x) * u_size.y, 0.0, 1.0);
+  return vec4(mix(u_background_top, u_background_bottom, t), 1.0);
+#else
   vec2 half_texel = 0.5 / max(u_size, vec2(1.0));
   vec2 uv = clamp(pixel_coordinate / u_size, half_texel, 1.0 - half_texel);
 #if defined(IMPELLER_TARGET_OPENGLES) && !defined(IMPELLER_OPENGLES_UNFLIPPED_DEPRECATED)
@@ -86,6 +97,7 @@ vec4 sample_backdrop(vec2 pixel_coordinate) {
   uv.y = 1.0 - uv.y;
 #endif
   return texture(u_backdrop, uv);
+#endif
 }
 
 vec3 apply_saturation(vec3 color) {

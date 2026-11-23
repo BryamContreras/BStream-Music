@@ -79,12 +79,14 @@ class AppSurfaceInput extends StatelessWidget {
     required this.child,
     this.borderRadius = 8,
     this.blur = true,
+    this.backdropGradient,
     super.key,
   });
 
   final Widget child;
   final double borderRadius;
   final bool blur;
+  final ({Color top, Color bottom})? backdropGradient;
 
   @override
   Widget build(BuildContext context) {
@@ -98,6 +100,7 @@ class AppSurfaceInput extends StatelessWidget {
         blurSigma: 10,
         intensity: 0.9,
         backdropMotion: moving,
+        backdropGradient: backdropGradient,
         child: child,
       );
       final motion = LiquidGlassMotionScope.maybeOf(context);

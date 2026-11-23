@@ -5,10 +5,11 @@ import 'package:flutter/scheduler.dart';
 /// Vsync-aligned clocks for decoration, without requesting unused display
 /// frames. Controls/gestures keep their ordinary TickerProvider.
 class FrameRateTickerProvider implements TickerProvider {
-  FrameRateTickerProvider({this.maxFramesPerSecond = 60})
-    : assert(maxFramesPerSecond > 0);
+  FrameRateTickerProvider({double maxFramesPerSecond = 60})
+    : assert(maxFramesPerSecond > 0),
+      _maxFramesPerSecond = maxFramesPerSecond;
 
-  final double maxFramesPerSecond;
+  double _maxFramesPerSecond;
   final Set<_FrameRateTicker> _tickers = {};
   double _refreshRate = 60;
   bool _enabled = true;
@@ -16,16 +17,28 @@ class FrameRateTickerProvider implements TickerProvider {
 
   void setDisplayRefreshRate(double hertz) {
     _refreshRate = hertz.isFinite && hertz > 0 ? hertz : 60;
+    _updateDelays();
+  }
+
+  void setMaxFramesPerSecond(double value) {
+    assert(value.isFinite && value > 0);
+    if (value == _maxFramesPerSecond) return;
+    _maxFramesPerSecond = value;
+    _updateDelays();
+  }
+
+  void _updateDelays() {
+    final delay = _delay;
     for (final ticker in _tickers) {
-      ticker.delay = _delay;
+      ticker.delay = delay;
     }
   }
 
   Duration get _delay {
-    if (_refreshRate <= maxFramesPerSecond + 0.5) return Duration.zero;
+    if (_refreshRate <= _maxFramesPerSecond + 0.5) return Duration.zero;
     // Wake between the unwanted vsync and the next desired one. Requesting
     // only after that unwanted vsync avoids an otherwise idle 120 Hz frame.
-    final stride = (_refreshRate / maxFramesPerSecond).ceil();
+    final stride = (_refreshRate / _maxFramesPerSecond).ceil();
     return Duration(
       microseconds: ((stride - 0.5) * 1000000 / _refreshRate).round(),
     );

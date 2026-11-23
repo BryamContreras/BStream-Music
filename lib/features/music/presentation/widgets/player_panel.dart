@@ -633,6 +633,9 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
                                     source: artworkSource,
                                     fallbackSource: artworkFallbackSource,
                                     animateTrackChanges: false,
+                                    cacheSmallBlur:
+                                        AppPlatform.current ==
+                                        AppPlatformType.android,
                                     reflectionArtworkRect:
                                         useExpandedArtworkHero
                                         ? _expandedArtworkHeroImageRect(
@@ -1270,7 +1273,12 @@ class _PlayerPanelState extends ConsumerState<PlayerPanel> {
   Future<void> _openPlaybackQueuePage(BuildContext context) async {
     _hideKeyboard();
     await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(builder: (_) => const _MobilePlaybackQueuePage()),
+      MaterialPageRoute<void>(
+        // Android already retains the queue's filtered artwork. Let the route
+        // animate those layers without allocating two full-page snapshots.
+        allowSnapshotting: AppPlatform.current != AppPlatformType.android,
+        builder: (_) => const _MobilePlaybackQueuePage(),
+      ),
     );
     if (!mounted) {
       return;
@@ -1831,6 +1839,8 @@ class _AppleMusicPlayerLayout extends StatelessWidget {
                       source: artworkSource,
                       fallbackSource: artworkFallbackSource,
                       animateTrackChanges: false,
+                      cacheSmallBlur:
+                          AppPlatform.current == AppPlatformType.android,
                       reflectionArtworkRect: useExpandedArtworkHero
                           ? _expandedArtworkHeroImageRect(
                               constraints.maxWidth,
@@ -2585,12 +2595,14 @@ class _PlaybackQueuePanel extends ConsumerStatefulWidget {
     required this.strings,
     required this.onClose,
     this.standaloneRail = false,
+    this.prefilteredBackdrop = false,
   });
 
   final PlaybackQueueState queue;
   final AppStrings strings;
   final VoidCallback onClose;
   final bool standaloneRail;
+  final bool prefilteredBackdrop;
 
   @override
   ConsumerState<_PlaybackQueuePanel> createState() =>
@@ -2599,6 +2611,10 @@ class _PlaybackQueuePanel extends ConsumerStatefulWidget {
 
 class _PlaybackQueuePanelState extends ConsumerState<_PlaybackQueuePanel> {
   static const double _estimatedQueueItemExtent = 77;
+  static final _backdropBlur = ImageFilter.blur(
+    sigmaX: _queueBackdropBlurSigma,
+    sigmaY: _queueBackdropBlurSigma,
+  );
   final ScrollController _queueScrollController = ScrollController();
   final Map<String, GlobalKey> _queueEntryKeys = <String, GlobalKey>{};
 
@@ -2728,7 +2744,8 @@ class _PlaybackQueuePanelState extends ConsumerState<_PlaybackQueuePanel> {
     ).textTheme.labelLarge?.copyWith(fontSize: 13, fontWeight: FontWeight.w800);
     return ClipRect(
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 32, sigmaY: 32),
+        enabled: !widget.prefilteredBackdrop,
+        filter: _backdropBlur,
         child: DecoratedBox(
           decoration: BoxDecoration(
             color: colors.surface.withValues(alpha: 0.64),
@@ -3192,6 +3209,8 @@ class _PlaybackQueueTileState extends State<_PlaybackQueueTile> {
   }
 }
 
+const _queueBackdropBlurSigma = 32.0;
+
 class _MobilePlaybackQueuePage extends ConsumerWidget {
   const _MobilePlaybackQueuePage();
 
@@ -3200,6 +3219,7 @@ class _MobilePlaybackQueuePage extends ConsumerWidget {
     final queue = ref.watch(playbackQueueProvider);
     final strings = ref.watch(appStringsProvider);
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final prefilterBackdrop = AppPlatform.current == AppPlatformType.android;
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
@@ -3212,12 +3232,15 @@ class _MobilePlaybackQueuePage extends ConsumerWidget {
         body: Stack(
           fit: StackFit.expand,
           children: [
-            const PlayerPlaybackGradientBackground(),
+            PlayerPlaybackGradientBackground(
+              panelBlurSigma: prefilterBackdrop ? _queueBackdropBlurSigma : 0,
+            ),
             SafeArea(
               child: _PlaybackQueuePanel(
                 queue: queue,
                 strings: strings,
                 standaloneRail: true,
+                prefilteredBackdrop: prefilterBackdrop,
                 onClose: () => Navigator.of(context).pop(),
               ),
             ),

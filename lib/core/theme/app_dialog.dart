@@ -197,6 +197,30 @@ class _LocalBackdropDialog extends StatelessWidget {
         dialogTheme.constraints ??
         const BoxConstraints(minWidth: 280);
 
+    final accentGradient = AppColors.glassSurfaceGradientFor(
+      context,
+      baseColor: Colors.transparent,
+      intensity: 0.82,
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+    );
+    const gradientKey = ValueKey('app-dialog-glass-gradient');
+    // With no separate outline to paint, draw the wash directly in the
+    // Material's shape rather than creating another clip for the same path.
+    final accentWash = shape is OutlinedBorder && shape.side == BorderSide.none
+        ? DecoratedBox(
+            key: gradientKey,
+            decoration: ShapeDecoration(shape: shape, gradient: accentGradient),
+          )
+        : ClipPath(
+            clipper: ShapeBorderClipper(shape: shape),
+            clipBehavior: Clip.antiAlias,
+            child: DecoratedBox(
+              key: gradientKey,
+              decoration: BoxDecoration(gradient: accentGradient),
+            ),
+          );
+
     final material = Material(
       color: backgroundColor,
       elevation: elevation,
@@ -209,27 +233,7 @@ class _LocalBackdropDialog extends StatelessWidget {
       child: Stack(
         fit: StackFit.passthrough,
         children: [
-          Positioned.fill(
-            child: ClipPath(
-              clipper: ShapeBorderClipper(shape: shape),
-              clipBehavior: Clip.antiAlias,
-              child: DecoratedBox(
-                key: const ValueKey('app-dialog-glass-gradient'),
-                decoration: BoxDecoration(
-                  // The Material owns the surface/tint. This transparent
-                  // base asks the shared helper only for its accent wash,
-                  // layered below text and controls.
-                  gradient: AppColors.glassSurfaceGradientFor(
-                    context,
-                    baseColor: Colors.transparent,
-                    intensity: 0.82,
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                ),
-              ),
-            ),
-          ),
+          Positioned.fill(child: accentWash),
           ?dialog.child,
         ],
       ),

@@ -11,6 +11,7 @@ class DecorativeProgressTransition extends StatefulWidget {
     this.duration = const Duration(milliseconds: 220),
     this.curve = Curves.easeOutCubic,
     this.animateProgress = true,
+    this.minimumPaintedStep = 0,
     this.animationKey,
     this.child,
     super.key,
@@ -20,6 +21,10 @@ class DecorativeProgressTransition extends StatefulWidget {
   final Duration duration;
   final Curve curve;
   final bool animateProgress;
+
+  /// A fraction that is approximately one physical pixel for this progress
+  /// indicator. Slow tweens can then paint fewer indistinguishable positions.
+  final double minimumPaintedStep;
   final Key? animationKey;
   final Widget Function(BuildContext context, double progress, Widget? child)
   builder;
@@ -80,6 +85,14 @@ class _DecorativeProgressTransitionState
     if (_animate && !_snapNextUpdate) {
       // Native samples and seeks retarget from the fraction actually displayed.
       _tween = Tween(begin: _paintedProgress, end: _target);
+      final durationSeconds = widget.duration.inMicroseconds / 1000000;
+      final distance = (_tween.end! - _tween.begin!).abs();
+      final visualRate = widget.minimumPaintedStep > 0 && durationSeconds > 0
+          ? (2 * distance / (widget.minimumPaintedStep * durationSeconds))
+                .clamp(8.0, 30.0)
+                .toDouble()
+          : 30.0;
+      _vsync.setMaxFramesPerSecond(visualRate);
       _controller.forward(from: 0);
     } else {
       _snapToTarget();

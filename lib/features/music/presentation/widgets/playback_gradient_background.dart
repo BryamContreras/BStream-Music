@@ -1,5 +1,8 @@
+import 'dart:math' as math;
 import 'dart:ui';
+import 'dart:ui' as ui show Image;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -28,7 +31,7 @@ class BrowsingTabBackground extends ConsumerWidget {
             ),
           )
         : null;
-    final colors = Theme.of(context).colorScheme;
+    final colors = AppColors.tabBackgroundGradientFor(context);
     if (photoPath != null) {
       return Stack(
         key: const ValueKey('browsing-tab-background-photo'),
@@ -39,13 +42,13 @@ class BrowsingTabBackground extends ConsumerWidget {
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [colors.surface, colors.surfaceContainerLowest],
+                colors: [colors.top, colors.bottom],
               ),
             ),
           ),
           AppBackgroundPhoto(
             path: photoPath,
-            scrim: colors.brightness == Brightness.dark
+            scrim: Theme.brightnessOf(context) == Brightness.dark
                 ? const Color(0x7A000000)
                 : const Color(0xA6FFFFFF),
           ),
@@ -58,7 +61,7 @@ class BrowsingTabBackground extends ConsumerWidget {
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [colors.surface, colors.surfaceContainerLowest],
+          colors: [colors.top, colors.bottom],
         ),
       ),
       child: ColoredBox(color: AppColors.tabBackgroundOverlayFor(context)),
@@ -69,10 +72,12 @@ class BrowsingTabBackground extends ConsumerWidget {
 class PlayerPlaybackGradientBackground extends ConsumerWidget {
   const PlayerPlaybackGradientBackground({
     this.additionalScrimAlpha = 0,
+    this.panelBlurSigma = 0,
     super.key,
   });
 
   final double additionalScrimAlpha;
+  final double panelBlurSigma;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -80,6 +85,13 @@ class PlayerPlaybackGradientBackground extends ConsumerWidget {
     return PlaybackArtworkBackdrop(
       source: artwork.source,
       fallbackSource: artwork.fallback,
+      cacheWidth: panelBlurSigma > 0 ? 384 : 1280,
+      cacheSmallBlur: panelBlurSigma > 0,
+      // Adjacent Gaussian passes on the known artwork combine by adding
+      // their variances. The controls and the header still paint separately.
+      blurSigma: math.sqrt(
+        _artworkBlurSigma * _artworkBlurSigma + panelBlurSigma * panelBlurSigma,
+      ),
       additionalScrimAlpha: additionalScrimAlpha,
     );
   }
@@ -95,6 +107,8 @@ class PlaybackArtworkBackdrop extends StatelessWidget {
     this.cacheWidth = 1280,
     this.additionalScrimAlpha = 0,
     this.animateTrackChanges = true,
+    this.cacheSmallBlur = false,
+    this.blurSigma = _artworkBlurSigma,
     this.reflectionArtworkRect,
     super.key,
   });
@@ -104,6 +118,8 @@ class PlaybackArtworkBackdrop extends StatelessWidget {
   final int cacheWidth;
   final double additionalScrimAlpha;
   final bool animateTrackChanges;
+  final bool cacheSmallBlur;
+  final double blurSigma;
 
   /// The foreground cover's unanimated square, in this backdrop's coordinates.
   /// Matching its crop lets the lower edge continue into a vertical reflection.
@@ -118,10 +134,14 @@ class PlaybackArtworkBackdrop extends StatelessWidget {
           _AnimatedPlaybackArtwork(
             source: source,
             fallbackSource: fallbackSource,
-            cacheWidth: cacheWidth,
+            cacheWidth: cacheSmallBlur && reflectionArtworkRect == null
+                ? math.min(cacheWidth, 384)
+                : cacheWidth,
             scale: 1.28,
             fallback: const _PlayerBackgroundFallback(),
             animateTrackChanges: animateTrackChanges,
+            cacheSmallBlur: cacheSmallBlur,
+            blurSigma: blurSigma,
             reflectionArtworkRect: reflectionArtworkRect,
           ),
           DecoratedBox(
@@ -208,6 +228,8 @@ class _AnimatedPlaybackArtwork extends StatefulWidget {
     required this.fallbackSource,
     required this.cacheWidth,
     required this.animateTrackChanges,
+    required this.cacheSmallBlur,
+    required this.blurSigma,
     required this.reflectionArtworkRect,
   });
 
@@ -217,6 +239,8 @@ class _AnimatedPlaybackArtwork extends StatefulWidget {
   final double scale;
   final Widget fallback;
   final bool animateTrackChanges;
+  final bool cacheSmallBlur;
+  final double blurSigma;
   final Rect? reflectionArtworkRect;
 
   @override
@@ -253,15 +277,15 @@ class _AnimatedPlaybackArtworkState extends State<_AnimatedPlaybackArtwork> {
         fallbackSource: widget.fallbackSource,
         cacheWidth: widget.cacheWidth,
         fallback: widget.fallback,
+        scale: widget.scale,
+        cacheSmallBlur: widget.cacheSmallBlur,
+        blurSigma: widget.blurSigma,
         reflectionArtworkRect: widget.reflectionArtworkRect,
       );
       background = ClipRect(
-        child: widget.reflectionArtworkRect != null
+        child: widget.reflectionArtworkRect != null || widget.cacheSmallBlur
             ? image
-            : ImageFiltered(
-                imageFilter: ImageFilter.blur(sigmaX: 44, sigmaY: 44),
-                child: Transform.scale(scale: widget.scale, child: image),
-              ),
+            : _liveArtworkBlur(image, widget.scale, sigma: widget.blurSigma),
       );
     }
     final artwork = SizedBox.expand(
@@ -300,12 +324,18 @@ class _PlaybackBackgroundImage extends StatelessWidget {
     required this.fallback,
     required this.fallbackSource,
     required this.cacheWidth,
+    required this.scale,
+    required this.cacheSmallBlur,
+    required this.blurSigma,
     required this.reflectionArtworkRect,
   });
 
   final String source;
   final String? fallbackSource;
   final int cacheWidth;
+  final double scale;
+  final bool cacheSmallBlur;
+  final double blurSigma;
   final Widget fallback;
   final Rect? reflectionArtworkRect;
 
@@ -317,15 +347,136 @@ class _PlaybackBackgroundImage extends StatelessWidget {
       fallbackSource: fallbackSource,
       cacheWidth: cacheWidth,
       fit: BoxFit.cover,
-      fallback: fallback,
-      imageBuilder: reflectionRect == null
-          ? null
-          : (context, image) => ProgressiveReflectedArtworkImage(
+      fallback: cacheSmallBlur && reflectionRect == null
+          ? _liveArtworkBlur(fallback, scale)
+          : fallback,
+      imageBuilder: reflectionRect != null
+          ? (context, image) => ProgressiveReflectedArtworkImage(
               image: image.image!,
               artworkRect: reflectionRect,
               filterQuality: image.filterQuality,
-            ),
+            )
+          : cacheSmallBlur
+          ? _buildSmallBlur
+          : null,
     );
+  }
+
+  Widget _buildSmallBlur(BuildContext context, RawImage sourceImage) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final size = constraints.biggest;
+        final live = _liveArtworkBlur(sourceImage, scale, sigma: blurSigma);
+        if (!size.isFinite || size.isEmpty) return live;
+        return Image(
+          image: _SmallArtworkBlurProvider(
+            _SmallArtworkBlurKey(sourceImage.image!, size, scale, blurSigma),
+          ),
+          excludeFromSemantics: true,
+          fit: BoxFit.fill,
+          filterQuality: FilterQuality.medium,
+          frameBuilder: (context, child, frame, synchronous) =>
+              synchronous || frame != null ? child : live,
+          errorBuilder: (context, error, stack) => live,
+        );
+      },
+    );
+  }
+}
+
+const _artworkBlurSigma = 44.0;
+
+Widget _liveArtworkBlur(
+  Widget image,
+  double scale, {
+  double sigma = _artworkBlurSigma,
+}) => ImageFiltered(
+  imageFilter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+  child: Transform.scale(scale: scale, child: image),
+);
+
+@immutable
+class _SmallArtworkBlurKey {
+  const _SmallArtworkBlurKey(this.cover, this.size, this.scale, this.sigma);
+
+  final ui.Image cover;
+  final Size size;
+  final double scale;
+  final double sigma;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _SmallArtworkBlurKey &&
+      size == other.size &&
+      scale == other.scale &&
+      sigma == other.sigma &&
+      cover.isCloneOf(other.cover);
+
+  @override
+  int get hashCode => Object.hash(size, scale, sigma);
+}
+
+/// Shares the filtered pixels through Flutter's existing bounded image cache.
+/// The menu and queue keep their own crops. Matching crops use one image,
+/// including across route openings. Tint, fades and controls stay live.
+class _SmallArtworkBlurProvider extends ImageProvider<_SmallArtworkBlurKey> {
+  const _SmallArtworkBlurProvider(this.key);
+
+  final _SmallArtworkBlurKey key;
+  static const _maxSide = 256;
+
+  @override
+  Future<_SmallArtworkBlurKey> obtainKey(ImageConfiguration configuration) =>
+      SynchronousFuture(key);
+
+  @override
+  ImageStreamCompleter loadImage(
+    _SmallArtworkBlurKey key,
+    ImageDecoderCallback decode,
+  ) => OneFrameImageStreamCompleter(_render(key));
+
+  Future<ImageInfo> _render(_SmallArtworkBlurKey key) async {
+    final rect = Offset.zero & key.size;
+    final artworkBounds = Rect.fromCenter(
+      center: rect.center,
+      width: rect.width * key.scale,
+      height: rect.height * key.scale,
+    );
+    final ratio = math.min(1.0, _maxSide / key.size.longestSide);
+    final width = (key.size.width * ratio).ceil();
+    final height = (key.size.height * ratio).ceil();
+    final recorder = PictureRecorder();
+    // The expanded photo supplies the blur beyond the menu's edges. Let
+    // toImage crop the finished result, after that padding has been sampled.
+    final canvas = Canvas(recorder)
+      ..scale(width / key.size.width, height / key.size.height)
+      ..saveLayer(
+        artworkBounds,
+        Paint()
+          ..imageFilter = ImageFilter.blur(
+            sigmaX: key.sigma,
+            sigmaY: key.sigma,
+          ),
+      );
+    final cover = key.cover.clone();
+    try {
+      paintImage(
+        canvas: canvas,
+        rect: artworkBounds,
+        image: cover,
+        fit: BoxFit.cover,
+        filterQuality: FilterQuality.medium,
+      );
+      canvas.restore();
+      final picture = recorder.endRecording();
+      try {
+        return ImageInfo(image: await picture.toImage(width, height));
+      } finally {
+        picture.dispose();
+      }
+    } finally {
+      cover.dispose();
+    }
   }
 }
 

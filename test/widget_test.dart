@@ -262,6 +262,57 @@ void main() {
     }
   }
 
+  for (final photo in <String?>[null, '/tmp/shell-background.jpg']) {
+    testWidgets('search glass samples the shell gradient with photo $photo', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view
+        ..physicalSize = const Size(360, 800)
+        ..devicePixelRatio = 1;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        tester.view
+          ..resetPhysicalSize()
+          ..resetDevicePixelRatio();
+      });
+
+      await tester.pumpWidget(
+        _testApp(
+          settingsController: _FakeSettingsController(
+            SettingsState(
+              downloadDirectory: '/tmp/bstream',
+              language: AppLanguage.spanish,
+              surfaceBackgroundMode: SurfaceBackgroundMode.liquidGlass,
+              appBackgroundPath: photo,
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.tap(
+        find.byKey(const ValueKey('bottom-navigation-detached-search')),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+
+      final inputGlass = find.descendant(
+        of: find.byKey(const ValueKey('search-input-surface')),
+        matching: find.byType(LiquidGlassSurface),
+      );
+      final glass = tester.widget<LiquidGlassSurface>(inputGlass);
+      expect(
+        glass.backdropGradient,
+        photo == null
+            ? AppColors.tabBackgroundGradientFor(tester.element(inputGlass))
+            : null,
+      );
+      expect(glass.adaptiveEdgeEnabled, isTrue);
+      expect(glass.blurSigma, 10);
+      await tester.pumpWidget(const SizedBox.shrink());
+      debugDefaultTargetPlatformOverride = null;
+    });
+  }
+
   testWidgets('selected font reaches the light and dark app themes', (
     tester,
   ) async {

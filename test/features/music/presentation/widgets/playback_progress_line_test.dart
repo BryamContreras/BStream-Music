@@ -86,6 +86,40 @@ void main() {
     expect(transform.transform.storage[0], closeTo(0.8, 0.0001));
   });
 
+  testWidgets('small motion uses fewer paints and seeks keep their tween', (
+    tester,
+  ) async {
+    var paints = 0;
+    var painted = 0.0;
+    Widget progress(double value) => MaterialApp(
+      home: DecorativeProgressTransition(
+        value: value,
+        minimumPaintedStep: 0.001,
+        builder: (context, value, _) {
+          paints++;
+          painted = value;
+          return const SizedBox();
+        },
+      ),
+    );
+
+    Future<int> animate(double target) async {
+      await tester.pumpWidget(progress(target));
+      final before = paints;
+      for (var frame = 0; frame < 24; frame++) {
+        await tester.pump(const Duration(microseconds: 16667));
+      }
+      expect(painted, closeTo(target, 0.00001));
+      return paints - before;
+    }
+
+    await tester.pumpWidget(progress(0.4));
+    final slowPaints = await animate(0.401);
+    final seekPaints = await animate(0.9);
+    expect(slowPaints, greaterThan(0));
+    expect(seekPaints, greaterThan(slowPaints));
+  });
+
   testWidgets('keeps fill color and progress semantics unchanged', (
     tester,
   ) async {

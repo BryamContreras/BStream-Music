@@ -137,6 +137,7 @@ flutter:
 
   shaders:
     - shaders/liquid_glass_refraction.frag
+    - shaders/liquid_glass_gradient.frag
 
   fonts:
     - family: Roboto

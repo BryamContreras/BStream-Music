@@ -8,6 +8,7 @@ import 'package:flutter/scheduler.dart';
 
 import '../../../../core/animation/frame_rate_ticker_provider.dart';
 import '../../domain/entities/lyric_word.dart';
+import 'lyrics_glyph_snapshot.dart';
 import 'lyrics_line_layout.dart';
 
 /// A playback anchor in lyric time, including the user's lyric offset.
@@ -212,6 +213,10 @@ class _LyricsWordTimingTextState extends State<LyricsWordTimingText>
   @override
   Widget build(BuildContext context) {
     final defaults = DefaultTextStyle.of(context);
+    final snapshotPixelRatio =
+        !kIsWeb && Theme.of(context).platform == TargetPlatform.android
+        ? MediaQuery.devicePixelRatioOf(context)
+        : null;
     final style = applyLyricsTextAccessibility(
       widget.style.inherit ? defaults.style.merge(widget.style) : widget.style,
       lyricsTextAccessibilityOverridesOf(context),
@@ -238,6 +243,7 @@ class _LyricsWordTimingTextState extends State<LyricsWordTimingText>
           locale: locale,
           heightBehavior: heightBehavior,
           widthBasis: defaults.textWidthBasis,
+          snapshotPixelRatio: snapshotPixelRatio,
         );
         if (_paragraph == null || _paragraphKey != key) {
           _invalidateParagraph();
@@ -253,6 +259,8 @@ class _LyricsWordTimingTextState extends State<LyricsWordTimingText>
             locale: locale,
             heightBehavior: heightBehavior,
             widthBasis: defaults.textWidthBasis,
+            snapshotPixelRatio: snapshotPixelRatio,
+            onForegroundReady: _paintClock.invalidate,
           );
           _layoutCount++;
         }
@@ -308,8 +316,10 @@ class _WordPaintClock extends ChangeNotifier {
 
   void update(Duration value) {
     position = value;
-    notifyListeners();
+    invalidate();
   }
+
+  void invalidate() => notifyListeners();
 }
 
 class _WordParagraph {
@@ -324,6 +334,8 @@ class _WordParagraph {
     required Locale? locale,
     required TextHeightBehavior? heightBehavior,
     required TextWidthBasis widthBasis,
+    required double? snapshotPixelRatio,
+    required VoidCallback onForegroundReady,
   }) {
     TextPainter painter(TextStyle appearance) => TextPainter(
       text: TextSpan(text: text, style: appearance),
@@ -355,14 +367,70 @@ class _WordParagraph {
         ),
     ];
     lastEnd = words.map((word) => word.end).reduce((a, b) => a > b ? a : b);
+    if (snapshotPixelRatio != null && (style.shadows?.isNotEmpty ?? false)) {
+      unawaited(_snapshotForeground(snapshotPixelRatio, onForegroundReady));
+    }
   }
 
   late final TextPainter foreground;
   late final TextPainter background;
   late final List<_WordBoxes> tokens;
   late final Duration lastEnd;
+  ui.Image? _foregroundImage;
+  Rect? _foregroundBounds;
+  bool _disposed = false;
+
+  Future<void> _snapshotForeground(double ratio, VoidCallback onReady) async {
+    const padding = LyricsGlyphSnapshot.overflowPadding;
+    final width = ((foreground.width + padding * 2) * ratio).ceil();
+    final height = ((foreground.height + padding * 2) * ratio).ceil();
+    if (width > LyricsGlyphSnapshot.maximumSnapshotEdge ||
+        height > LyricsGlyphSnapshot.maximumSnapshotEdge ||
+        width * height > LyricsGlyphSnapshot.maximumSnapshotPixels) {
+      return;
+    }
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder)..scale(ratio);
+    foreground.paint(canvas, const Offset(padding, padding));
+    final picture = recorder.endRecording();
+    try {
+      final image = await picture.toImage(width, height);
+      if (_disposed) {
+        image.dispose();
+        return;
+      }
+      _foregroundBounds = Rect.fromLTWH(
+        -padding,
+        -padding,
+        width / ratio,
+        height / ratio,
+      );
+      _foregroundImage = image;
+      onReady();
+    } on Exception {
+      // The live paragraph remains available if the renderer cannot retain it.
+    } finally {
+      picture.dispose();
+    }
+  }
+
+  void paintForeground(Canvas canvas) {
+    final image = _foregroundImage;
+    if (image == null) {
+      foreground.paint(canvas, Offset.zero);
+      return;
+    }
+    canvas.drawImageRect(
+      image,
+      Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
+      _foregroundBounds!,
+      Paint()..filterQuality = FilterQuality.low,
+    );
+  }
 
   void dispose() {
+    _disposed = true;
+    _foregroundImage?.dispose();
     foreground.dispose();
     background.dispose();
   }
@@ -392,7 +460,7 @@ class _WordTimingPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final position = clock.position;
     if (position >= paragraph.lastEnd) {
-      paragraph.foreground.paint(canvas, Offset.zero);
+      paragraph.paintForeground(canvas);
       return;
     }
     paragraph.background.paint(canvas, Offset.zero);
@@ -428,7 +496,7 @@ class _WordTimingPainter extends CustomPainter {
     }
     canvas.save();
     canvas.clipPath(clip);
-    paragraph.foreground.paint(canvas, Offset.zero);
+    paragraph.paintForeground(canvas);
     canvas.restore();
   }
 

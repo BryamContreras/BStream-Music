@@ -34,6 +34,7 @@ class SearchView extends ConsumerStatefulWidget {
     this.onBrowseCategorySelected,
     this.active = true,
     this.bottomContentPadding = 0,
+    this.usesShellBackdrop = false,
     super.key,
   });
 
@@ -46,6 +47,7 @@ class SearchView extends ConsumerStatefulWidget {
   final ValueChanged<SearchBrowseCategory>? onBrowseCategorySelected;
   final bool active;
   final double bottomContentPadding;
+  final bool usesShellBackdrop;
 
   @override
   ConsumerState<SearchView> createState() => _SearchViewState();
@@ -321,6 +323,17 @@ class _SearchViewState extends ConsumerState<SearchView> {
       _ => false,
     };
     final showHeading = !isMobile || !searchState.hasQuery;
+    // This input is the first scrolling item. With the shell's default
+    // backdrop, no other sliver paints between it and the linear gradient.
+    final usesGradient =
+        widget.usesShellBackdrop &&
+        Theme.of(context).platform == TargetPlatform.android &&
+        AppColors.surfaceBackgroundModeFor(context).isLiquidGlass &&
+        ref.watch(
+          settingsControllerProvider.select(
+            (state) => state.hasValue && state.value?.appBackgroundPath == null,
+          ),
+        );
     final headingTransitionDuration = MediaQuery.disableAnimationsOf(context)
         ? Duration.zero
         : SearchView._headingTransitionDuration;
@@ -397,6 +410,9 @@ class _SearchViewState extends ConsumerState<SearchView> {
                     child: SearchInput(
                       initialText: searchState.query,
                       autofocus: _focusInputAfterClear,
+                      backdropGradient: usesGradient
+                          ? AppColors.tabBackgroundGradientFor(context)
+                          : null,
                       hintText: strings.searchHint,
                       tooltip: strings.search,
                       clearTooltip: strings.clearSearch,

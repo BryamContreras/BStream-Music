@@ -16,6 +16,7 @@ class SearchInput extends StatefulWidget {
     this.compact = false,
     this.requestFocusOnClear = true,
     this.autofocus = false,
+    this.backdropGradient,
     super.key,
   });
 
@@ -31,6 +32,7 @@ class SearchInput extends StatefulWidget {
   final bool compact;
   final bool requestFocusOnClear;
   final bool autofocus;
+  final ({Color top, Color bottom})? backdropGradient;
 
   @override
   State<SearchInput> createState() => _SearchInputState();
@@ -117,6 +119,7 @@ class _SearchInputState extends State<SearchInput> {
     return AppSurfaceInput(
       key: const ValueKey('search-input-surface'),
       blur: !widget.compact,
+      backdropGradient: widget.backdropGradient,
       child: SizedBox(
         width: double.infinity,
         child: TextField(

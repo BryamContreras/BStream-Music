@@ -15,6 +15,7 @@ class PlaybackProgressLine extends StatefulWidget {
     this.fillKey,
     this.semanticsLabel,
     this.animateProgress = true,
+    this.minimumPaintedStep = 0,
     super.key,
   });
 
@@ -27,6 +28,7 @@ class PlaybackProgressLine extends StatefulWidget {
   final Key? fillKey;
   final String? semanticsLabel;
   final bool animateProgress;
+  final double minimumPaintedStep;
 
   @override
   State<PlaybackProgressLine> createState() => _PlaybackProgressLineState();
@@ -85,6 +87,7 @@ class _PlaybackProgressLineState extends State<PlaybackProgressLine>
               animationKey: widget.progressAnimationKey,
               value: progress,
               animateProgress: widget.animateProgress,
+              minimumPaintedStep: widget.minimumPaintedStep,
               // Scaling the already laid-out fill changes only its paint
               // transform. FractionallySizedBox would relayout this high-traffic
               // progress line on every animation tick while playback advances.

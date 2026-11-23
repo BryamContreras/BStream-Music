@@ -25,6 +25,7 @@ class PlaybackMenuArtworkBackground extends ConsumerWidget {
       source: cachedSource ?? source,
       fallbackSource: artwork.fallback,
       cacheWidth: 256,
+      cacheSmallBlur: Theme.of(context).platform == TargetPlatform.android,
       additionalScrimAlpha: Theme.of(context).brightness == Brightness.dark
           ? .20
           : 0,

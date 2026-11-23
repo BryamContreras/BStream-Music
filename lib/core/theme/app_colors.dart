@@ -578,6 +578,14 @@ abstract final class AppColors {
     return accent.withValues(alpha: 0.025);
   }
 
+  /// Opaque gradient painted behind the browsing tabs before the tab wash.
+  static ({Color top, Color bottom}) tabBackgroundGradientFor(
+    BuildContext context,
+  ) {
+    final colors = Theme.of(context).colorScheme;
+    return (top: colors.surface, bottom: colors.surfaceContainerLowest);
+  }
+
   /// Distinct surface for fixed tab headers. It is slightly more accent-aware
   /// than [cardSurfaceFor], but remains neutral enough to sit above content.
   static Color tabHeaderSurfaceFor(
