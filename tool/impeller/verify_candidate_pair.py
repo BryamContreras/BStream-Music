@@ -30,10 +30,15 @@ def metadata(apk):
     assert package and package.group(1)=="com.bstream.bstream_music", badging.splitlines()[0]
     assert re.search(r"^native-code: 'arm64-v8a'\s*$",badging,re.M), "Unexpected APK native ABIs"
     certificate=output(a.apksigner,"verify","--print-certs",apk)
-    digests=re.findall(r"^Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]+)",certificate,re.M)
-    assert len(digests)==1,"Expected exactly one signing certificate"
+    # Recent apksigner versions report platform-specific signer ranges instead
+    # of numbered signers. The same certificate can appear in multiple ranges.
+    # Keep the requirement of exactly one distinct signing certificate.
+    digests={digest.lower() for digest in re.findall(
+        r"^\s*Signer (?:#\d+|\([^\r\n]*\)) certificate SHA-256 digest:\s*([0-9a-fA-F]{64})\s*$",
+        certificate,re.M)}
+    assert len(digests)==1, f"Expected one distinct signing certificate; found {len(digests)}"
     return dict(package=package.group(1),versionCode=package.group(2),versionName=package.group(3),
-                certificateSha256=digests[0].lower(),sha256=sha(apk.read_bytes()))
+                certificateSha256=next(iter(digests)),sha256=sha(apk.read_bytes()))
 
 def payload_names(z):
     # v1 signature records are not application code, and can differ when the
