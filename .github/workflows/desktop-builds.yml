@@ -130,7 +130,7 @@ jobs:
   ios:
     name: iOS unsigned IPA
     needs: [metadata, quality]
-    runs-on: macos-26
+    runs-on: macos-26-intel
     timeout-minutes: 45
     env:
       APP_VERSION: ${{ needs.metadata.outputs.app_version }}
