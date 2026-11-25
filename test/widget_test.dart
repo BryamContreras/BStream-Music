@@ -8630,9 +8630,7 @@ void main() {
     expect((decoration.border! as Border).top.width, 1.4);
   });
 
-  testWidgets('search eagerly keeps all capped result thumbnails mounted', (
-    tester,
-  ) async {
+  testWidgets('search lazily builds capped result thumbnails', (tester) async {
     final tracks = List.generate(
       20,
       (index) => TrackInfo(
@@ -8680,12 +8678,29 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 300));
 
-    expect(find.byType(TrackResultTile), findsNWidgets(20));
-    final artwork = tester
+    expect(find.byType(TrackResultTile), findsWidgets);
+    expect(find.byType(TrackResultTile).evaluate().length, lessThan(20));
+    final visibleArtwork = tester
         .widgetList<ProportionalArtwork>(find.byType(ProportionalArtwork))
         .toList(growable: false);
-    expect(artwork, hasLength(20));
-    expect(artwork.every((image) => image.cacheWidth == 256), isTrue);
+    expect(visibleArtwork, isNotEmpty);
+    expect(visibleArtwork.every((image) => image.cacheWidth == 256), isTrue);
+
+    final finalResult = find.byKey(const ValueKey('search-result-search-19'));
+    expect(finalResult, findsNothing);
+    await tester.scrollUntilVisible(
+      finalResult,
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(finalResult, findsOneWidget);
+    final finalArtwork = tester.widget<ProportionalArtwork>(
+      find.descendant(
+        of: finalResult,
+        matching: find.byType(ProportionalArtwork),
+      ),
+    );
+    expect(finalArtwork.cacheWidth, 256);
   });
 
   testWidgets('download bars show realtime progress from the active task id', (
