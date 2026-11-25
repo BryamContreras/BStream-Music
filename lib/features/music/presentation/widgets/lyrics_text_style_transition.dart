@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:flutter/foundation.dart' show ValueListenable, kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../../domain/entities/lyric_word.dart';
@@ -97,10 +97,17 @@ class _LyricsTextStyleTransitionState extends State<LyricsTextStyleTransition>
     } else {
       // A seek can retarget an unfinished transition. Keep its current opacity
       // so the pair does not flash or restart from an endpoint.
-      _controller.animateTo(
+      final transition = _controller.animateTo(
         widget.active ? 1 : 0,
         duration: const Duration(milliseconds: 520),
       );
+      if (!widget.active && _retainTimedForeground) {
+        transition.then((_) {
+          if (mounted && !widget.active && _controller.value == 0) {
+            setState(() {});
+          }
+        });
+      }
     }
   }
 
@@ -120,6 +127,13 @@ class _LyricsTextStyleTransitionState extends State<LyricsTextStyleTransition>
       widget.wordPlayback != null &&
       widget.monotonicClock != null;
 
+  // Keep the shaped foreground only while its outgoing fade can paint it.
+  bool get _retainTimedForeground =>
+      _usesWordTiming &&
+      !_disableAnimations &&
+      !kIsWeb &&
+      Theme.of(context).platform == TargetPlatform.android;
+
   Widget _paragraph(
     String text,
     TextStyle style, {
@@ -131,13 +145,16 @@ class _LyricsTextStyleTransitionState extends State<LyricsTextStyleTransition>
     final heightBehavior =
         defaults.textHeightBehavior ??
         DefaultTextHeightBehavior.maybeOf(context);
-    if (wordTiming && _usesWordTiming && widget.active) {
+    if (wordTiming &&
+        _usesWordTiming &&
+        (widget.active || (_controller.value > 0 && _retainTimedForeground))) {
       return LyricsWordTimingText(
         text: text,
         words: widget.words,
         style: resolvedStyle,
         textAlign: widget.textAlign,
         active: widget.active,
+        paintFullHighlight: !widget.active,
         playback: widget.wordPlayback!,
         monotonicClock: widget.monotonicClock!,
       );

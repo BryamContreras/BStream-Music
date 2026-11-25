@@ -49,6 +49,7 @@ class LyricsWordTimingText extends StatefulWidget {
     required this.active,
     required this.playback,
     required this.monotonicClock,
+    this.paintFullHighlight = false,
     super.key,
   });
 
@@ -57,6 +58,9 @@ class LyricsWordTimingText extends StatefulWidget {
   final TextStyle style;
   final TextAlign textAlign;
   final bool active;
+
+  /// Uses the completed appearance while the selected line fades out.
+  final bool paintFullHighlight;
   final ValueListenable<LyricsWordPlaybackSample> playback;
   final Duration Function() monotonicClock;
 
@@ -265,6 +269,9 @@ class _LyricsWordTimingTextState extends State<LyricsWordTimingText>
           _layoutCount++;
         }
         final paragraph = _paragraph!;
+        if (widget.paintFullHighlight) {
+          paragraph.prepareExitHalo();
+        }
         return Semantics(
           label: widget.text,
           selected: widget.active,
@@ -279,6 +286,7 @@ class _LyricsWordTimingTextState extends State<LyricsWordTimingText>
                     paragraph: paragraph,
                     clock: _paintClock,
                     reducedMotion: _reducedMotion,
+                    fullyHighlighted: widget.paintFullHighlight,
                   ),
                 ),
               ),
@@ -347,6 +355,26 @@ class _WordParagraph {
       textWidthBasis: widthBasis,
     )..layout(minWidth: width.isFinite ? width : 0, maxWidth: width);
     foreground = painter(style);
+    if (snapshotPixelRatio != null &&
+        style.foreground == null &&
+        style.background == null &&
+        style.backgroundColor == null &&
+        (style.decoration == null || style.decoration == TextDecoration.none) &&
+        (style.shadows?.isNotEmpty ?? false)) {
+      _captureHalo = () async {
+        final shadows = painter(style.copyWith(color: Colors.transparent));
+        _solidForeground = painter(style.copyWith(shadows: const []));
+        try {
+          await _snapshotForeground(
+            snapshotPixelRatio,
+            onForegroundReady,
+            shadows: shadows,
+          );
+        } finally {
+          shadows.dispose();
+        }
+      };
+    }
     final color = style.color ?? Colors.white;
     background = painter(
       style.copyWith(
@@ -377,12 +405,37 @@ class _WordParagraph {
   late final List<_WordBoxes> tokens;
   late final Duration lastEnd;
   ui.Image? _foregroundImage;
+  ui.Image? _haloImage;
+  TextPainter? _solidForeground;
+  Future<void> Function()? _captureHalo;
+
+  void prepareExitHalo() {
+    final capture = _captureHalo;
+    if (capture == null) return;
+    _captureHalo = null;
+    unawaited(capture());
+  }
+
+  void paintExit(Canvas canvas) {
+    final halo = _haloImage;
+    if (halo != null) {
+      _paintImage(canvas, halo);
+      _solidForeground!.paint(canvas, Offset.zero);
+      return;
+    }
+    foreground.paint(canvas, Offset.zero);
+  }
+
   final Paint _foregroundImagePaint = Paint()
     ..filterQuality = FilterQuality.low;
   Rect? _foregroundBounds;
   bool _disposed = false;
 
-  Future<void> _snapshotForeground(double ratio, VoidCallback onReady) async {
+  Future<void> _snapshotForeground(
+    double ratio,
+    VoidCallback onReady, {
+    TextPainter? shadows,
+  }) async {
     const padding = LyricsGlyphSnapshot.overflowPadding;
     final width = ((foreground.width + padding * 2) * ratio).ceil();
     final height = ((foreground.height + padding * 2) * ratio).ceil();
@@ -393,7 +446,7 @@ class _WordParagraph {
     }
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder)..scale(ratio);
-    foreground.paint(canvas, const Offset(padding, padding));
+    (shadows ?? foreground).paint(canvas, const Offset(padding, padding));
     final picture = recorder.endRecording();
     try {
       final image = await picture.toImage(width, height);
@@ -407,7 +460,11 @@ class _WordParagraph {
         width / ratio,
         height / ratio,
       );
-      _foregroundImage = image;
+      if (shadows == null) {
+        _foregroundImage = image;
+      } else {
+        _haloImage = image;
+      }
       onReady();
     } on Exception {
       // The live paragraph remains available if the renderer cannot retain it.
@@ -422,6 +479,10 @@ class _WordParagraph {
       foreground.paint(canvas, Offset.zero);
       return;
     }
+    _paintImage(canvas, image);
+  }
+
+  void _paintImage(Canvas canvas, ui.Image image) {
     canvas.drawImageRect(
       image,
       Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
@@ -433,6 +494,8 @@ class _WordParagraph {
   void dispose() {
     _disposed = true;
     _foregroundImage?.dispose();
+    _solidForeground?.dispose();
+    _haloImage?.dispose();
     foreground.dispose();
     background.dispose();
   }
@@ -452,16 +515,23 @@ class _WordTimingPainter extends CustomPainter {
     required this.paragraph,
     required this.clock,
     required this.reducedMotion,
+    required this.fullyHighlighted,
   }) : super(repaint: clock);
 
   final _WordParagraph paragraph;
   final _WordPaintClock clock;
   final bool reducedMotion;
+  final bool fullyHighlighted;
   final Path _clip = Path();
 
   @override
   void paint(Canvas canvas, Size size) {
     final position = clock.position;
+    if (fullyHighlighted) {
+      // A seek may leave before the final word. Freeze the full active appearance.
+      paragraph.paintExit(canvas);
+      return;
+    }
     if (position >= paragraph.lastEnd) {
       paragraph.paintForeground(canvas);
       return;
@@ -507,5 +577,6 @@ class _WordTimingPainter extends CustomPainter {
   bool shouldRepaint(covariant _WordTimingPainter oldDelegate) =>
       paragraph != oldDelegate.paragraph ||
       clock != oldDelegate.clock ||
-      reducedMotion != oldDelegate.reducedMotion;
+      reducedMotion != oldDelegate.reducedMotion ||
+      fullyHighlighted != oldDelegate.fullyHighlighted;
 }

@@ -1,0 +1,252 @@
+diff --git a/engine/src/flutter/impeller/display_list/canvas.cc b/engine/src/flutter/impeller/display_list/canvas.cc
+index e4496d8a..545c0355 100644
+--- a/engine/src/flutter/impeller/display_list/canvas.cc
++++ b/engine/src/flutter/impeller/display_list/canvas.cc
+@@ -1928,7 +1928,9 @@ void Canvas::SaveLayer(const Paint& paint,
+     return;
+   }
+ 
+-  // Render the backdrop entity.
++  // Render the backdrop entity. This is the final render into the saveLayer,
++  // not a shared filter snapshot or an intermediate input to another filter.
++  backdrop_filter_contents->SetIsDirectBackdrop();
+   Entity backdrop_entity;
+   backdrop_entity.SetContents(std::move(backdrop_filter_contents));
+   backdrop_entity.SetTransform(
+diff --git a/engine/src/flutter/impeller/entity/contents/filters/filter_contents.h b/engine/src/flutter/impeller/entity/contents/filters/filter_contents.h
+index 5c3bdb95..e8f16795 100644
+--- a/engine/src/flutter/impeller/entity/contents/filters/filter_contents.h
++++ b/engine/src/flutter/impeller/entity/contents/filters/filter_contents.h
+@@ -106,6 +106,11 @@ class FilterContents : public Contents {
+   ///         Entity being rendered.
+   void SetEffectTransform(const Matrix& effect_transform);
+ 
++  /// The output is about to be rendered directly into a bounded backdrop
++  /// saveLayer. Never set for cached/shared or intermediate filter snapshots.
++  void SetIsDirectBackdrop() { is_direct_backdrop_ = true; }
++  bool IsDirectBackdrop() const { return is_direct_backdrop_; }
++
+   /// @brief  Create an Entity that renders this filter's output.
+   std::optional<Entity> GetEntity(
+       const ContentContext& renderer,
+@@ -228,6 +233,7 @@ class FilterContents : public Contents {
+ 
+   FilterInput::Vector inputs_;
+   Matrix effect_transform_ = Matrix();
++  bool is_direct_backdrop_ = false;
+ 
+   FilterContents(const FilterContents&) = delete;
+ 
+diff --git a/engine/src/flutter/impeller/entity/contents/filters/gaussian_blur_filter_contents.cc b/engine/src/flutter/impeller/entity/contents/filters/gaussian_blur_filter_contents.cc
+index a2de2193..d2b9420a 100644
+--- a/engine/src/flutter/impeller/entity/contents/filters/gaussian_blur_filter_contents.cc
++++ b/engine/src/flutter/impeller/entity/contents/filters/gaussian_blur_filter_contents.cc
+@@ -278,6 +278,10 @@ struct DownsamplePassArgs {
+   /// This can differ if we request a coverage hint but it is rejected, as is
+   /// the case with backdrop filters.
+   Matrix transform;
++  // Optional raster restriction; deliberately does not change UVs or texture
++  // dimensions. Only populated when the visible output is known.
++  bool uses_full_snapshot = false;
++  std::optional<IRect32> scissor = std::nullopt;
+ };
+ 
+ /// Calculates info required for the down-sampling pass.
+@@ -396,6 +400,7 @@ DownsamplePassArgs CalculateDownsamplePassArgs(
+         .effective_scalar = effective_scalar,
+         .transform = input_snapshot.transform *
+                      Matrix::MakeTranslation(-divisible_padding),
++        .uses_full_snapshot = true,
+     };
+   }
+ }
+@@ -427,6 +432,9 @@ fml::StatusOr<RenderTarget> MakeDownsampleSubpass(
+           HostBuffer& data_host_buffer = renderer.GetTransientsDataBuffer();
+ 
+           pass.SetCommandLabel("Gaussian blur downsample");
++          if (pass_args.scissor.has_value()) {
++            pass.SetScissor(pass_args.scissor.value());
++          }
+           auto pipeline_options = OptionsFromPass(pass);
+           pipeline_options.primitive_type = PrimitiveType::kTriangleStrip;
+           pass.SetPipeline(renderer.GetTexturePipeline(pipeline_options));
+@@ -481,6 +489,9 @@ fml::StatusOr<RenderTarget> MakeDownsampleSubpass(
+           HostBuffer& data_host_buffer = renderer.GetTransientsDataBuffer();
+ 
+           pass.SetCommandLabel("Gaussian blur downsample");
++          if (pass_args.scissor.has_value()) {
++            pass.SetScissor(pass_args.scissor.value());
++          }
+           auto pipeline_options = OptionsFromPass(pass);
+           pipeline_options.primitive_type = PrimitiveType::kTriangleStrip;
+           if (pass_args.uv_bounds.has_value()) {
+@@ -804,6 +815,50 @@ std::optional<Rect> GaussianBlurFilterContents::GetFilterCoverage(
+       Point(blur_info.local_padding.x, blur_info.local_padding.y));
+ }
+ 
++std::optional<IRect32> GaussianBlurFilterContents::CalculateDownsampleScissor(
++    const Rect& output_limit,
++    const Matrix& output_transform,
++    const ISize& texture_size,
++    const Vector2& kernel_radius) {
++  if (output_limit.IsEmpty() || !output_limit.IsFinite() ||
++      !output_transform.IsFinite() ||
++      !output_transform.IsTranslationScaleOnly() ||
++      output_transform.m[0] <= 0 || output_transform.m[5] <= 0 ||
++      !output_transform.IsInvertible() || texture_size.IsEmpty()) {
++    return std::nullopt;
++  }
++  // Inverse-map the real output clip to the original downsample texture.
++  // With separable filters the required input is the Cartesian product of
++  // both finite kernel supports. Four extra texels conservatively cover
++  // linear filtering in the two passes, final interpolation and rounding.
++  constexpr Scalar kInterpolationGuard = 4.0f;
++  Rect output = output_limit.TransformBounds(output_transform.Invert());
++  if (!output.IsFinite()) {
++    return std::nullopt;
++  }
++  const Rect full = Rect::MakeSize(texture_size);
++  // Clamp the final sampling footprint before applying the blur supports.
++  // Otherwise a clip wholly outside the texture could incorrectly exclude
++  // taps that are reached through its clamped edge texel.
++  auto visible = output.Intersection(full);
++  if (!visible.has_value()) {
++    return std::nullopt;
++  }
++  Rect required = visible->Expand(
++      kernel_radius + Vector2(kInterpolationGuard, kInterpolationGuard));
++  auto clipped = required.Intersection(full);
++  if (!clipped.has_value()) {
++    // If clamp-to-edge sampling occurs entirely off-texture, retain the
++    // original implementation instead of inferring a degenerate region.
++    return std::nullopt;
++  }
++  const auto scissor = IRect32::RoundOut(clipped.value());
++  if (scissor == IRect32::RoundOut(full)) {
++    return std::nullopt;
++  }
++  return scissor;
++}
++
+ std::optional<Entity> GaussianBlurFilterContents::RenderFilter(
+     const FilterInput::Vector& inputs,
+     const ContentContext& renderer,
+@@ -877,6 +932,37 @@ std::optional<Entity> GaussianBlurFilterContents::RenderFilter(
+       blur_info.scaled_sigma, blur_info.padding, input_snapshot.value(),
+       source_expanded_coverage_hint, source_bounds, inputs[0], snapshot_entity);
+ 
++  const Matrix output_transform =
++      entity.GetTransform() *
++      Matrix::MakeScale(1.f / blur_info.source_space_scalar) *
++      Matrix::MakeTranslation(-1 * blur_info.source_space_offset) *
++      downsample_pass_args.transform *
++      Matrix::MakeScale(1 / downsample_pass_args.effective_scalar);
++
++  // The raster target supplies the output coverage for direct render calls.
++  // Do not infer a limit for an unbounded snapshot or an arbitrary shader.
++  // The clamp sampler cannot wrap a kernel tap to the opposite texture edge.
++  if (IsDirectBackdrop() && downsample_pass_args.uses_full_snapshot &&
++      downsample_pass_args.effective_scalar.x <= 0.125f &&
++      downsample_pass_args.effective_scalar.y <= 0.125f &&
++      coverage_hint.has_value() && GetCoverageHint() == coverage_hint &&
++      mask_blur_style_ == BlurStyle::kNormal && !bounds_.has_value() &&
++      tile_mode_ == Entity::TileMode::kClamp &&
++      input_snapshot->sampler_descriptor.width_address_mode ==
++          SamplerAddressMode::kClampToEdge &&
++      input_snapshot->sampler_descriptor.height_address_mode ==
++          SamplerAddressMode::kClampToEdge &&
++      input_snapshot->sampler_descriptor.max_anisotropy == 1) {
++    const Vector2 kernel_radius(
++        ScaleBlurRadius(blur_info.blur_radius.x,
++                        downsample_pass_args.effective_scalar.x),
++        ScaleBlurRadius(blur_info.blur_radius.y,
++                        downsample_pass_args.effective_scalar.y));
++    downsample_pass_args.scissor = CalculateDownsampleScissor(
++        coverage_hint.value(), output_transform,
++        downsample_pass_args.subpass_size, kernel_radius);
++  }
++
+   fml::StatusOr<RenderTarget> pass1_out = MakeDownsampleSubpass(
+       renderer, command_buffer_1, input_snapshot->texture,
+       input_snapshot->sampler_descriptor, downsample_pass_args, tile_mode_);
+@@ -965,12 +1051,7 @@ std::optional<Entity> GaussianBlurFilterContents::RenderFilter(
+ 
+   Entity blur_output_entity = Entity::FromSnapshot(
+       Snapshot{.texture = pass3_out.value().GetRenderTargetTexture(),
+-               .transform =
+-                   entity.GetTransform() *                                   //
+-                   Matrix::MakeScale(1.f / blur_info.source_space_scalar) *  //
+-                   Matrix::MakeTranslation(-1 * blur_info.source_space_offset) *
+-                   downsample_pass_args.transform *  //
+-                   Matrix::MakeScale(1 / downsample_pass_args.effective_scalar),
++               .transform = output_transform,
+                .sampler_descriptor = sampler_desc,
+                .opacity = input_snapshot->opacity,
+                .needs_rasterization_for_runtime_effects = true},
+diff --git a/engine/src/flutter/impeller/entity/contents/filters/gaussian_blur_filter_contents.h b/engine/src/flutter/impeller/entity/contents/filters/gaussian_blur_filter_contents.h
+index ff456441..a89948b7 100644
+--- a/engine/src/flutter/impeller/entity/contents/filters/gaussian_blur_filter_contents.h
++++ b/engine/src/flutter/impeller/entity/contents/filters/gaussian_blur_filter_contents.h
+@@ -134,6 +134,15 @@ class GaussianBlurFilterContents final : public FilterContents {
+   /// Visible for testing.
+   static Scalar CalculateScale(Scalar sigma);
+ 
++  /// Restrict downsample rasterization to the texels required for the output
++  /// and both separable kernel supports. Keep the original sampling lattice.
++  /// Visible for testing.
++  static std::optional<IRect32> CalculateDownsampleScissor(
++      const Rect& output_limit,
++      const Matrix& output_transform,
++      const ISize& texture_size,
++      const Vector2& kernel_radius);
++
+   /// Scales down the sigma value to match Skia's behavior.
+   ///
+   /// effective_blur_radius = CalculateBlurRadius(ScaleSigma(sigma_));
+diff --git a/engine/src/flutter/impeller/entity/contents/filters/gaussian_blur_filter_contents_unittests.cc b/engine/src/flutter/impeller/entity/contents/filters/gaussian_blur_filter_contents_unittests.cc
+index 9e1653ee..76786beb 100644
+--- a/engine/src/flutter/impeller/entity/contents/filters/gaussian_blur_filter_contents_unittests.cc
++++ b/engine/src/flutter/impeller/entity/contents/filters/gaussian_blur_filter_contents_unittests.cc
+@@ -487,6 +487,42 @@ TEST_P(GaussianBlurFilterContentsTest, TextureContentsWithEffectTransform) {
+   }
+ }
+ 
++TEST(GaussianBlurFilterContentsTest, DownsampleScissorPreservesKernelHalo) {
++  auto scissor = GaussianBlurFilterContents::CalculateDownsampleScissor(
++      Rect::MakeXYWH(0, 0, 1440, 240),
++      Matrix::MakeTranslation({-48, -48, 0}) *
++          Matrix::MakeScale({8, 8, 1}),
++      ISize(192, 402), Vector2(6, 6));
++  ASSERT_TRUE(scissor.has_value());
++  EXPECT_EQ(scissor.value(), IRect32::MakeLTRB(0, 0, 192, 46));
++}
++
++TEST(GaussianBlurFilterContentsTest, DownsampleScissorUsesOriginalGrid) {
++  auto scissor = GaussianBlurFilterContents::CalculateDownsampleScissor(
++      Rect::MakeLTRB(138.25, 739.0, 290.5, 780.25),
++      Matrix::MakeTranslation({-31.5, -72.25, 0}) *
++          Matrix::MakeScale({7.75, 8.25, 1}),
++      ISize(140, 280), Vector2(3, 7));
++  ASSERT_TRUE(scissor.has_value());
++  EXPECT_EQ(scissor.value(), IRect32::MakeLTRB(14, 87, 49, 115));
++}
++
++TEST(GaussianBlurFilterContentsTest, DownsampleScissorFallsBackWhenNotSafe) {
++  EXPECT_FALSE(GaussianBlurFilterContents::CalculateDownsampleScissor(
++                   Rect::MakeSize(ISize(80, 80)), Matrix(),
++                   ISize(80, 80), Vector2(3, 3))
++                   .has_value());
++  EXPECT_FALSE(GaussianBlurFilterContents::CalculateDownsampleScissor(
++                   Rect::MakeXYWH(20, 20, 20, 20),
++                   Matrix::MakeScale({-1, 1, 1}), ISize(80, 80),
++                   Vector2(3, 3))
++                   .has_value());
++  EXPECT_FALSE(GaussianBlurFilterContents::CalculateDownsampleScissor(
++                   Rect::MakeXYWH(200, 200, 20, 20), Matrix(),
++                   ISize(80, 80), Vector2(3, 3))
++                   .has_value());
++}
++
+ TEST(GaussianBlurFilterContentsTest, CalculateSigmaForBlurRadius) {
+   Scalar sigma = 1.0;
+   Scalar radius = GaussianBlurFilterContents::CalculateBlurRadius(

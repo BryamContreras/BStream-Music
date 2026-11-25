@@ -1,5 +1,7 @@
 import 'package:bstream_music/features/music/presentation/widgets/lyrics_glyph_snapshot.dart';
+import 'package:bstream_music/features/music/domain/entities/lyric_word.dart';
 import 'package:bstream_music/features/music/presentation/widgets/lyrics_text_style_transition.dart';
+import 'package:bstream_music/features/music/presentation/widgets/lyrics_word_timing_text.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -250,5 +252,87 @@ void main() {
     } finally {
       semantics.dispose();
     }
+  });
+
+  testWidgets('Android releases the outgoing word paragraph after its fade', (
+    tester,
+  ) async {
+    const line = 'ONE TWO';
+    const words = [
+      LyricWord(
+        text: 'ONE',
+        start: Duration.zero,
+        end: Duration(seconds: 1),
+        startOffset: 0,
+        endOffset: 3,
+      ),
+      LyricWord(
+        text: 'TWO',
+        start: Duration(seconds: 1),
+        end: Duration(seconds: 2),
+        startOffset: 4,
+        endOffset: 7,
+      ),
+    ];
+    final playback = ValueNotifier(
+      const LyricsWordPlaybackSample(
+        position: Duration(milliseconds: 500),
+        sampledAt: Duration.zero,
+        isPlaying: false,
+      ),
+    );
+    addTearDown(playback.dispose);
+    Widget timed(bool active, {bool reducedMotion = false}) => MaterialApp(
+      theme: ThemeData(platform: TargetPlatform.android),
+      home: MediaQuery(
+        data: MediaQueryData(disableAnimations: reducedMotion),
+        child: Center(
+          child: SizedBox(
+            width: 336,
+            child: LyricsTextStyleTransition(
+              active: active,
+              originalText: line,
+              secondaryText: null,
+              secondaryKey: const ValueKey('secondary'),
+              activeStyle: activeStyle,
+              inactiveStyle: inactiveStyle,
+              secondaryFontSize: 16.8,
+              textAlign: TextAlign.start,
+              contentKey: const ValueKey('timed'),
+              words: words,
+              wordPlayback: playback,
+              monotonicClock: () => Duration.zero,
+            ),
+          ),
+        ),
+      ),
+    );
+    final paragraph = find.byType(LyricsWordTimingText);
+    await tester.pumpWidget(timed(true));
+    final state = tester.state(paragraph);
+    await tester.pumpWidget(timed(false));
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(tester.state(paragraph), same(state));
+    expect(
+      tester.widget<LyricsWordTimingText>(paragraph).paintFullHighlight,
+      true,
+    );
+    expect((state as dynamic).debugTickerActive, false);
+    // A seek may select the same line again before the fade has completed.
+    await tester.pumpWidget(timed(true));
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(tester.state(paragraph), same(state));
+    expect(
+      tester.widget<LyricsWordTimingText>(paragraph).paintFullHighlight,
+      false,
+    );
+    await tester.pumpWidget(timed(false));
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pump();
+    expect(paragraph, findsNothing);
+    await tester.pumpWidget(timed(true, reducedMotion: true));
+    await tester.pumpWidget(timed(false, reducedMotion: true));
+    expect(paragraph, findsNothing);
+    expect(tester.takeException(), isNull);
   });
 }
