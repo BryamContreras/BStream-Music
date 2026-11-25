@@ -39,8 +39,12 @@ export NINJA_STATUS='[%f/%t %e s] '
 cd "$checkout/engine/src"
 target="bstream_android_${mode}_arm64"
 flutter/tools/gn --target-dir "$target" --runtime-mode "$mode" --android --android-cpu arm64 --no-rbe --no-goma
-ninja_bin="${BSTREAM_NINJA_BIN:-/usr/bin/ninja}"
-if [[ ! -x "$ninja_bin" ]]; then ninja_bin="$(command -v ninja)"; fi
+ninja_bin="${BSTREAM_NINJA_BIN:-$checkout/third_party/ninja/ninja}"
+if [[ ! -x "$ninja_bin" ]]; then ninja_bin=/usr/bin/ninja; fi
+if [[ ! -x "$ninja_bin" ]]; then
+  echo "The pinned CIPD Ninja or system Ninja executable is required." >&2
+  exit 1
+fi
 out="out/$target"
 "$ninja_bin" -C "$out" -j "${BSTREAM_ENGINE_JOBS:-12}" flutter/shell/platform/android:flutter_shell_native
 mkdir -p "$(dirname "$output")"
