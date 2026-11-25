@@ -226,6 +226,15 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Preserve unverified APKs for diagnosis if checks fail
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: BStream-Android-Impeller-unverified-diagnostic
+          path: dist/impeller-candidate/*.apk
+          if-no-files-found: ignore
+          retention-days: 3
+
       - name: Remove temporary signing material
         if: always()
         shell: bash

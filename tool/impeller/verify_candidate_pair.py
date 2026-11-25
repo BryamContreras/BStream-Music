@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 import re
+import ssl
 import subprocess
 from pathlib import Path
 from zipfile import ZipFile
@@ -29,13 +30,12 @@ def metadata(apk):
     package=re.search(r"^package: name='([^']+)' versionCode='([^']+)' versionName='([^']+)'",badging,re.M)
     assert package and package.group(1)=="com.bstream.bstream_music", badging.splitlines()[0]
     assert re.search(r"^native-code: 'arm64-v8a'\s*$",badging,re.M), "Unexpected APK native ABIs"
-    certificate=output(a.apksigner,"verify","--print-certs",apk)
-    # Recent apksigner versions report platform-specific signer ranges instead
-    # of numbered signers. The same certificate can appear in multiple ranges.
-    # Keep the requirement of exactly one distinct signing certificate.
-    digests={digest.lower() for digest in re.findall(
-        r"^\s*Signer (?:#\d+|\([^\r\n]*\)) certificate SHA-256 digest:\s*([0-9a-fA-F]{64})\s*$",
-        certificate,re.M)}
+    certificate=output(a.apksigner,"verify","--print-certs-pem",apk)
+    # Derive the digest from the verified X.509 certificate itself, not the
+    # tool's version-dependent display labels or hexadecimal formatting.
+    # Repeated copies for different Android platform ranges are deduplicated.
+    pems=re.findall(r"-----BEGIN CERTIFICATE-----\s+[A-Za-z0-9+/=\s]+?-----END CERTIFICATE-----",certificate)
+    digests={sha(ssl.PEM_cert_to_DER_cert(pem)) for pem in pems}
     assert len(digests)==1, f"Expected one distinct signing certificate; found {len(digests)}"
     return dict(package=package.group(1),versionCode=package.group(2),versionName=package.group(3),
                 certificateSha256=next(iter(digests)),sha256=sha(apk.read_bytes()))
