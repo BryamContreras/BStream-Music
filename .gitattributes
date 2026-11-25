@@ -4,3 +4,4 @@ packaging/linux/bstream-music text eol=lf
 *.entitlements text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
+tool/impeller/*.patch text eol=lf whitespace=-blank-at-eol
