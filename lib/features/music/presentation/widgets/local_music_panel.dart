@@ -90,6 +90,7 @@ class _LocalMusicPanelState extends ConsumerState<LocalMusicPanel>
   final _filterController = TextEditingController();
   final _filterFocus = FocusNode();
   bool _filterVisible = false;
+  String _filterText = '';
 
   bool get _canPop => _route.type != _LocalMusicRouteType.root;
 
@@ -155,7 +156,11 @@ class _LocalMusicPanelState extends ConsumerState<LocalMusicPanel>
     return true;
   }
 
-  void _onFilterChanged() => setState(() {});
+  void _onFilterChanged() {
+    final text = _filterController.text;
+    if (_filterText == text) return;
+    setState(() => _filterText = text);
+  }
 
   void _showFilter() {
     setState(() => _filterVisible = true);
@@ -182,9 +187,32 @@ class _LocalMusicPanelState extends ConsumerState<LocalMusicPanel>
   @override
   Widget build(BuildContext context) {
     final strings = ref.watch(appStringsProvider);
-    final settings = ref.watch(settingsControllerProvider);
-    final settingsState = settings.value;
-    if (settingsState == null) {
+    final settings = ref.watch(
+      settingsControllerProvider.select(
+        (state) => state.whenData((settings) {
+          final filters = settings.localMusicFilters;
+          return DeviceAudioQuery(
+            bstreamRoot: settings.downloadDirectory,
+            options: DeviceAudioFilterOptions(
+              excludeWhatsAppAudio: filters.contains(
+                LocalMusicFilter.hideWhatsAppAudio,
+              ),
+              excludeTelegramAudio: filters.contains(
+                LocalMusicFilter.hideTelegramAudio,
+              ),
+              excludeAudioRecordings: filters.contains(
+                LocalMusicFilter.hideAudioRecordings,
+              ),
+              excludeShortAudio: filters.contains(
+                LocalMusicFilter.hideTracksUnder30Seconds,
+              ),
+            ),
+          );
+        }),
+      ),
+    );
+    final query = settings.value;
+    if (query == null) {
       return _LocalCatalogMessageFrame(
         title: strings.localTab,
         bottomContentPadding: widget.bottomContentPadding,
@@ -194,24 +222,6 @@ class _LocalMusicPanelState extends ConsumerState<LocalMusicPanel>
       );
     }
 
-    final filters = settingsState.localMusicFilters;
-    final query = DeviceAudioQuery(
-      bstreamRoot: settingsState.downloadDirectory,
-      options: DeviceAudioFilterOptions(
-        excludeWhatsAppAudio: filters.contains(
-          LocalMusicFilter.hideWhatsAppAudio,
-        ),
-        excludeTelegramAudio: filters.contains(
-          LocalMusicFilter.hideTelegramAudio,
-        ),
-        excludeAudioRecordings: filters.contains(
-          LocalMusicFilter.hideAudioRecordings,
-        ),
-        excludeShortAudio: filters.contains(
-          LocalMusicFilter.hideTracksUnder30Seconds,
-        ),
-      ),
-    );
     final catalog = ref.watch(deviceAudioCatalogResultProvider(query));
 
     return catalog.when(

@@ -1,7 +1,8 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -1181,6 +1182,61 @@ class _SearchBrowseCategoriesSliver extends StatefulWidget {
 class _SearchBrowseCategoriesSliverState
     extends State<_SearchBrowseCategoriesSliver> {
   late var _visuals = _SearchBrowseVisual.forCategories(widget.categories);
+  final _pendingCards = <_SearchBrowseCategoryCardState, int>{};
+  ScrollPosition? _position;
+  ScrollPosition? _observedPosition;
+  bool _visibilityCheckPending = false;
+
+  void _observeCard(_SearchBrowseCategoryCardState card, int? index) {
+    if (index == null) {
+      _pendingCards.remove(card);
+    } else {
+      _pendingCards[card] = index;
+    }
+    _updateObserver();
+    if (index != null) _checkVisibilityAfterLayout();
+  }
+
+  void _updateObserver() {
+    final next = _pendingCards.isEmpty ? null : _position;
+    if (_observedPosition == next) return;
+    _observedPosition?.removeListener(_checkVisibilityAfterLayout);
+    _observedPosition = next;
+    next?.addListener(_checkVisibilityAfterLayout);
+  }
+
+  void _checkVisibilityAfterLayout() {
+    if (_visibilityCheckPending || _pendingCards.isEmpty) return;
+    _visibilityCheckPending = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _visibilityCheckPending = false;
+      if (!mounted || _pendingCards.isEmpty) return;
+      final padding = context.findRenderObject();
+      final grid = padding is RenderSliverPadding ? padding.child : null;
+      if (grid is! RenderSliverGrid || grid.geometry == null) return;
+      final constraints = grid.constraints;
+      final layout = grid.gridDelegate.getLayout(constraints);
+      final start = constraints.scrollOffset;
+      final end = start + constraints.remainingPaintExtent;
+      for (final entry in _pendingCards.entries) {
+        final item = layout.getGeometryForChildIndex(entry.value);
+        final visible =
+            start < end &&
+            item.scrollOffset < end &&
+            item.scrollOffset + item.mainAxisExtent > start;
+        entry.key._setVisible(visible);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _observedPosition?.removeListener(_checkVisibilityAfterLayout);
+    _observedPosition = null;
+    _position = null;
+    _pendingCards.clear();
+    super.dispose();
+  }
 
   @override
   void didUpdateWidget(covariant _SearchBrowseCategoriesSliver oldWidget) {
@@ -1192,6 +1248,9 @@ class _SearchBrowseCategoriesSliverState
 
   @override
   Widget build(BuildContext context) {
+    _position = Scrollable.maybeOf(context)?.position;
+    _updateObserver();
+    _checkVisibilityAfterLayout();
     final categories = widget.categories;
     final textScaler = MediaQuery.textScalerOf(context);
     final cardExtent = (textScaler.scale(20) * 2 + 28)
@@ -1212,6 +1271,8 @@ class _SearchBrowseCategoriesSliverState
           return _SearchBrowseCategoryCard(
             key: ValueKey('search-browse-card-${category.id}'),
             category: category,
+            visibilityOwner: this,
+            gridIndex: index,
             loadArtwork: widget.loadArtwork,
             visual: _visuals[index],
             onTap: () => widget.onSelected(category),
@@ -1225,6 +1286,8 @@ class _SearchBrowseCategoriesSliverState
 class _SearchBrowseCategoryCard extends ConsumerStatefulWidget {
   const _SearchBrowseCategoryCard({
     required this.category,
+    required this.visibilityOwner,
+    required this.gridIndex,
     required this.loadArtwork,
     required this.visual,
     required this.onTap,
@@ -1232,6 +1295,8 @@ class _SearchBrowseCategoryCard extends ConsumerStatefulWidget {
   });
 
   final SearchBrowseCategory category;
+  final _SearchBrowseCategoriesSliverState visibilityOwner;
+  final int gridIndex;
   final bool loadArtwork;
   final _SearchBrowseVisual visual;
   final VoidCallback onTap;
@@ -1243,9 +1308,7 @@ class _SearchBrowseCategoryCard extends ConsumerStatefulWidget {
 
 class _SearchBrowseCategoryCardState
     extends ConsumerState<_SearchBrowseCategoryCard> {
-  ScrollPosition? _scrollPosition;
   bool _visible = false;
-  bool _visibilityCheckPending = false;
   bool _cacheLookupStarted = false;
   bool _hasFreshArtwork = false;
   String? _artwork;
@@ -1253,6 +1316,10 @@ class _SearchBrowseCategoryCardState
   @override
   void didUpdateWidget(covariant _SearchBrowseCategoryCard oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.visibilityOwner != widget.visibilityOwner) {
+      oldWidget.visibilityOwner._observeCard(this, null);
+      _visible = false;
+    }
     if (oldWidget.category != widget.category) {
       _artwork = null;
       _cacheLookupStarted = false;
@@ -1262,36 +1329,12 @@ class _SearchBrowseCategoryCardState
 
   @override
   void dispose() {
-    _observeScroll(null);
+    widget.visibilityOwner._observeCard(this, null);
     super.dispose();
   }
 
-  void _observeScroll(ScrollPosition? position) {
-    if (_scrollPosition == position) return;
-    _scrollPosition?.removeListener(_checkVisibilityAfterLayout);
-    _scrollPosition = position;
-    if (position == null) {
-      _visible = false;
-    } else {
-      position.addListener(_checkVisibilityAfterLayout);
-    }
-  }
-
-  void _checkVisibilityAfterLayout() {
-    if (_visibilityCheckPending) return;
-    _visibilityCheckPending = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _visibilityCheckPending = false;
-      if (!mounted || _scrollPosition == null) return;
-      final box = context.findRenderObject();
-      if (box is! RenderBox || !box.hasSize) return;
-      final bounds = MatrixUtils.transformRect(
-        box.getTransformTo(null),
-        Offset.zero & box.size,
-      );
-      final visible = bounds.overlaps(Offset.zero & MediaQuery.sizeOf(context));
-      if (_visible != visible) setState(() => _visible = visible);
-    });
+  void _setVisible(bool visible) {
+    if (mounted && _visible != visible) setState(() => _visible = visible);
   }
 
   void _scheduleCachedArtworkRestore() {
@@ -1341,12 +1384,12 @@ class _SearchBrowseCategoryCardState
     }
     // Once live artwork is ready, this card needs no scroll callbacks. A disk
     // image alone still allows the usual refresh when the card becomes visible.
-    _observeScroll(
-      needsArtwork && !_hasFreshArtwork
-          ? Scrollable.maybeOf(context)?.position
-          : null,
+    final observing = needsArtwork && !_hasFreshArtwork;
+    widget.visibilityOwner._observeCard(
+      this,
+      observing ? widget.gridIndex : null,
     );
-    if (_scrollPosition != null) _checkVisibilityAfterLayout();
+    if (!observing) _visible = false;
     final showPlaceholderIcon =
         _artwork == null && MediaQuery.textScalerOf(context).scale(20) <= 30;
     const radius = BorderRadius.all(Radius.circular(12));
@@ -1679,54 +1722,205 @@ class _SearchCategoryResultsSliverState
 
     return SliverPadding(
       padding: const EdgeInsets.fromLTRB(6, 0, 6, 18),
-      sliver: SliverToBoxAdapter(
-        child: AnimatedSwitcher(
-          key: const ValueKey('search-results-switcher'),
-          duration: disableAnimations
-              ? Duration.zero
-              : _SearchCategoryResultsSliver._transitionDuration,
-          reverseDuration: disableAnimations
-              ? Duration.zero
-              : _SearchCategoryResultsSliver._transitionDuration,
-          switchInCurve: Curves.easeOutCubic,
-          switchOutCurve: Curves.easeInCubic,
-          layoutBuilder: (currentChild, previousChildren) => Stack(
-            alignment: Alignment.topCenter,
-            children: <Widget>[...previousChildren, ?currentChild],
-          ),
-          transitionBuilder: (child, animation) {
-            final incoming = child.key == selectedKey;
-            final horizontalOffset = incoming
-                ? 0.045 * _direction
-                : -0.03 * _direction;
-            return ClipRect(
-              child: FadeTransition(
-                opacity: Tween<double>(begin: 0.35, end: 1).animate(animation),
-                child: SlideTransition(
-                  position: Tween<Offset>(
-                    begin: Offset(horizontalOffset, 0),
-                    end: Offset.zero,
-                  ).animate(animation),
-                  child: child,
-                ),
+      sliver: AnimatedSwitcher(
+        key: const ValueKey('search-results-switcher'),
+        duration: disableAnimations
+            ? Duration.zero
+            : _SearchCategoryResultsSliver._transitionDuration,
+        reverseDuration: disableAnimations
+            ? Duration.zero
+            : _SearchCategoryResultsSliver._transitionDuration,
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        layoutBuilder: (currentChild, previousChildren) => _SearchSliverStack(
+          children: <Widget>[...previousChildren, ?currentChild],
+        ),
+        transitionBuilder: (child, animation) {
+          final incoming = child.key == selectedKey;
+          final horizontalOffset = incoming
+              ? 0.045 * _direction
+              : -0.03 * _direction;
+          return SliverFadeTransition(
+            opacity: Tween<double>(begin: 0.35, end: 1).animate(animation),
+            sliver: AnimatedBuilder(
+              animation: animation,
+              child: child,
+              builder: (context, child) => _SearchSliverSlide(
+                fraction: horizontalOffset * (1 - animation.value),
+                child: child!,
               ),
-            );
-          },
-          // The key changes only with the selected category. Loading a page,
-          // refreshing it, or updating its bounded results therefore does not
-          // replay the tab transition or disturb the outer scroll position.
-          child: KeyedSubtree(
-            key: selectedKey,
-            child: _SearchCategoryResultsBody(
-              state: widget.state,
-              strings: widget.strings,
-              onOpenPlayer: widget.onOpenPlayer,
-              onAddToPlaylist: widget.onAddToPlaylist,
             ),
+          );
+        },
+        // The key changes only with the selected category. Loading a page,
+        // refreshing it, or updating its bounded results therefore does not
+        // replay the tab transition or disturb the outer scroll position.
+        child: KeyedSubtree(
+          key: selectedKey,
+          child: _SearchCategoryResultsBody(
+            state: widget.state,
+            strings: widget.strings,
+            onOpenPlayer: widget.onOpenPlayer,
+            onAddToPlaylist: widget.onAddToPlaylist,
           ),
         ),
       ),
     );
+  }
+}
+
+// Stack category pages in sliver space, so even during the existing transition
+// only the visible and cache-range rows of either category need to be built.
+class _SearchSliverStack extends MultiChildRenderObjectWidget {
+  const _SearchSliverStack({required super.children});
+
+  @override
+  _RenderSearchSliverStack createRenderObject(BuildContext context) =>
+      _RenderSearchSliverStack();
+}
+
+class _RenderSearchSliverStack extends RenderSliver
+    with
+        ContainerRenderObjectMixin<
+          RenderSliver,
+          SliverPhysicalContainerParentData
+        > {
+  @override
+  void setupParentData(RenderObject child) {
+    if (child.parentData is! SliverPhysicalContainerParentData) {
+      child.parentData = SliverPhysicalContainerParentData();
+    }
+  }
+
+  @override
+  void performLayout() {
+    double scroll = 0, paint = 0, layout = 0, maximum = 0, cache = 0, hit = 0;
+    var overflow = false;
+    for (var child = firstChild; child != null; child = childAfter(child)) {
+      child.layout(constraints, parentUsesSize: true);
+      final item = child.geometry!;
+      if (item.scrollOffsetCorrection != null) {
+        geometry = SliverGeometry(
+          scrollOffsetCorrection: item.scrollOffsetCorrection,
+        );
+        return;
+      }
+      scroll = math.max(scroll, item.scrollExtent);
+      paint = math.max(paint, item.paintExtent);
+      layout = math.max(layout, item.layoutExtent);
+      maximum = math.max(maximum, item.maxPaintExtent);
+      cache = math.max(cache, item.cacheExtent);
+      hit = math.max(hit, item.hitTestExtent);
+      overflow |= item.hasVisualOverflow;
+    }
+    geometry = SliverGeometry(
+      scrollExtent: scroll,
+      paintExtent: paint,
+      layoutExtent: layout,
+      maxPaintExtent: maximum,
+      cacheExtent: cache,
+      hitTestExtent: hit,
+      hasVisualOverflow: overflow,
+    );
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    for (var child = firstChild; child != null; child = childAfter(child)) {
+      if (child.geometry!.visible) context.paintChild(child, offset);
+    }
+  }
+
+  @override
+  bool hitTestChildren(
+    SliverHitTestResult result, {
+    required double mainAxisPosition,
+    required double crossAxisPosition,
+  }) {
+    for (var child = lastChild; child != null; child = childBefore(child)) {
+      if (child.hitTest(
+        result,
+        mainAxisPosition: mainAxisPosition,
+        crossAxisPosition: crossAxisPosition,
+      )) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  @override
+  double childMainAxisPosition(RenderSliver child) => 0;
+
+  @override
+  void applyPaintTransform(RenderObject child, Matrix4 transform) {}
+}
+
+class _SearchSliverSlide extends SingleChildRenderObjectWidget {
+  const _SearchSliverSlide({required this.fraction, required super.child});
+
+  final double fraction;
+
+  @override
+  _RenderSearchSliverSlide createRenderObject(BuildContext context) =>
+      _RenderSearchSliverSlide(fraction);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderSearchSliverSlide renderObject,
+  ) {
+    renderObject.fraction = fraction;
+  }
+}
+
+class _RenderSearchSliverSlide extends RenderProxySliver {
+  _RenderSearchSliverSlide(this._fraction);
+
+  double _fraction;
+  set fraction(double value) {
+    if (_fraction == value) return;
+    _fraction = value;
+    markNeedsPaint();
+    markNeedsSemanticsUpdate();
+  }
+
+  double get _dx => constraints.crossAxisExtent * _fraction;
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    if (child == null) return;
+    if (_fraction == 0) {
+      super.paint(context, offset);
+      return;
+    }
+    context.pushClipRect(
+      needsCompositing,
+      offset,
+      Rect.fromLTWH(0, 0, constraints.crossAxisExtent, geometry!.paintExtent),
+      (context, offset) => context.paintChild(child!, offset + Offset(_dx, 0)),
+    );
+  }
+
+  @override
+  bool hitTestChildren(
+    SliverHitTestResult result, {
+    required double mainAxisPosition,
+    required double crossAxisPosition,
+  }) =>
+      child != null &&
+      result.addWithAxisOffset(
+        paintOffset: Offset(_dx, 0),
+        mainAxisOffset: 0,
+        crossAxisOffset: _dx,
+        mainAxisPosition: mainAxisPosition,
+        crossAxisPosition: crossAxisPosition,
+        hitTest: child!.hitTest,
+      );
+
+  @override
+  void applyPaintTransform(RenderObject child, Matrix4 transform) {
+    transform.translateByDouble(_dx, 0, 0, 1);
   }
 }
 
@@ -1746,42 +1940,42 @@ class _SearchCategoryResultsBody extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     if (state.isSelectedCategoryLoading || !state.hasSelectedPage) {
-      return SizedBox(
-        height: _minimumBodyHeight(context),
-        child: const Center(child: CircularProgressIndicator()),
+      return SliverToBoxAdapter(
+        child: SizedBox(
+          height: _minimumBodyHeight(context),
+          child: const Center(child: CircularProgressIndicator()),
+        ),
       );
     }
 
     final page = state.selectedPage!;
     if (page.isEmpty) {
-      return ConstrainedBox(
-        constraints: BoxConstraints(minHeight: _minimumBodyHeight(context)),
-        child: _SearchEmptyState(
-          icon: _SearchResultsSliver._emptyIcon(state.selectedCategory),
-          title: _categoryLabel(strings, state.selectedCategory),
-          subtitle: _SearchResultsSliver._emptyMessage(
-            strings,
-            state.selectedCategory,
+      return SliverToBoxAdapter(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: _minimumBodyHeight(context)),
+          child: _SearchEmptyState(
+            icon: _SearchResultsSliver._emptyIcon(state.selectedCategory),
+            title: _categoryLabel(strings, state.selectedCategory),
+            subtitle: _SearchResultsSliver._emptyMessage(
+              strings,
+              state.selectedCategory,
+            ),
           ),
         ),
       );
     }
 
     if (state.selectedCategory == SearchCategory.albums) {
-      return Column(
-        children: [
-          for (var index = 0; index < page.albums.length; index++) ...[
-            _AlbumResultTile(
-              key: ValueKey('search-album-${page.albums[index].browseId}'),
-              album: page.albums[index],
-              strings: strings,
-              onOpenPlayer: onOpenPlayer,
-              onAddToPlaylist: onAddToPlaylist,
-            ),
-            if (index < page.albums.length - 1)
-              const SizedBox(height: appTrackRowGap),
-          ],
-        ],
+      return SliverList.separated(
+        itemCount: page.albums.length,
+        separatorBuilder: (_, _) => const SizedBox(height: appTrackRowGap),
+        itemBuilder: (context, index) => _AlbumResultTile(
+          key: ValueKey('search-album-${page.albums[index].browseId}'),
+          album: page.albums[index],
+          strings: strings,
+          onOpenPlayer: onOpenPlayer,
+          onAddToPlaylist: onAddToPlaylist,
+        ),
       );
     }
 
@@ -1794,25 +1988,19 @@ class _SearchCategoryResultsBody extends ConsumerWidget {
     }
 
     final tracks = page.tracks;
-    // Search pages are deliberately bounded, so keeping their rows mounted
-    // makes the cross-fade stable and avoids decoding thumbnails repeatedly.
-    return Column(
-      children: [
-        for (var index = 0; index < tracks.length; index++) ...[
-          TrackResultTile(
-            key: ValueKey(
-              'search-result-${tracks[index].id.isNotEmpty ? tracks[index].id : tracks[index].url}',
-            ),
-            track: tracks[index],
-            selectionScope: searchTrackSelectionScope,
-            onPlayTrack: (track) => _playSearchResult(ref, track),
-            preferCatalogArtwork:
-                state.selectedCategory != SearchCategory.videos,
-            onOpenPlayer: onOpenPlayer,
-          ),
-          if (index < tracks.length - 1) const SizedBox(height: appTrackRowGap),
-        ],
-      ],
+    return SliverList.separated(
+      itemCount: tracks.length,
+      separatorBuilder: (_, _) => const SizedBox(height: appTrackRowGap),
+      itemBuilder: (context, index) => TrackResultTile(
+        key: ValueKey(
+          'search-result-${tracks[index].id.isNotEmpty ? tracks[index].id : tracks[index].url}',
+        ),
+        track: tracks[index],
+        selectionScope: searchTrackSelectionScope,
+        onPlayTrack: (track) => _playSearchResult(ref, track),
+        preferCatalogArtwork: state.selectedCategory != SearchCategory.videos,
+        onOpenPlayer: onOpenPlayer,
+      ),
     );
   }
 
@@ -2024,7 +2212,7 @@ class _SearchCategoryTab extends StatelessWidget {
   }
 }
 
-class _ArtistResultsGrid extends StatelessWidget {
+class _ArtistResultsGrid extends StatefulWidget {
   const _ArtistResultsGrid({
     required this.artists,
     required this.strings,
@@ -2036,12 +2224,29 @@ class _ArtistResultsGrid extends StatelessWidget {
   final VoidCallback onOpenPlayer;
 
   @override
+  State<_ArtistResultsGrid> createState() => _ArtistResultsGridState();
+}
+
+class _ArtistResultsGridState extends State<_ArtistResultsGrid> {
+  double? _cachedWidth;
+  Widget? _cachedGrid;
+
+  @override
+  void didUpdateWidget(covariant _ArtistResultsGrid oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _cachedGrid = null;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
+    return SliverLayoutBuilder(
       builder: (context, constraints) {
         const spacing = 10.0;
         const targetCardWidth = 126.0;
-        final availableWidth = constraints.maxWidth;
+        final availableWidth = constraints.crossAxisExtent;
+        if (_cachedWidth == availableWidth && _cachedGrid != null) {
+          return _cachedGrid!;
+        }
         final columnCount =
             ((availableWidth + spacing) / (targetCardWidth + spacing))
                 .floor()
@@ -2049,20 +2254,31 @@ class _ArtistResultsGrid extends StatelessWidget {
         final cardWidth =
             (availableWidth - spacing * (columnCount - 1)) / columnCount;
 
-        return Wrap(
+        final artists = widget.artists;
+        _cachedWidth = availableWidth;
+        return _cachedGrid = SliverList.separated(
           key: const ValueKey('search-artist-results'),
-          spacing: spacing,
-          runSpacing: 12,
-          children: [
-            for (final artist in artists)
-              _ArtistResultCard(
-                key: ValueKey('search-artist-${artist.browseId}'),
-                artist: artist,
-                strings: strings,
-                width: cardWidth,
-                onOpenPlayer: onOpenPlayer,
-              ),
-          ],
+          itemCount: (artists.length / columnCount).ceil(),
+          separatorBuilder: (_, _) => const SizedBox(height: 12),
+          itemBuilder: (context, row) {
+            final start = row * columnCount;
+            final end = math.min(start + columnCount, artists.length);
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (var i = start; i < end; i++) ...[
+                  if (i != start) const SizedBox(width: spacing),
+                  _ArtistResultCard(
+                    key: ValueKey('search-artist-${artists[i].browseId}'),
+                    artist: artists[i],
+                    strings: widget.strings,
+                    width: cardWidth,
+                    onOpenPlayer: widget.onOpenPlayer,
+                  ),
+                ],
+              ],
+            );
+          },
         );
       },
     );

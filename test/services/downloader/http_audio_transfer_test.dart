@@ -199,6 +199,49 @@ void main() {
     expect(result.resumed, isFalse);
   });
 
+  test('gives each completed range a fresh retry budget', () async {
+    const payload = [0x49, 0x44, 0x33, 4, 5, 6, 7, 8, 9];
+    final failedRanges = <String>{};
+    final server = await _startServer((request) async {
+      final range = request.headers.value(HttpHeaders.rangeHeader)!;
+      if (failedRanges.add(range)) {
+        request.response.statusCode = HttpStatus.serviceUnavailable;
+      } else {
+        final [start, end] = range
+            .substring(6)
+            .split('-')
+            .map(int.parse)
+            .toList();
+        final bytes = payload.sublist(start, end + 1);
+        request.response
+          ..statusCode = HttpStatus.partialContent
+          ..contentLength = bytes.length
+          ..headers.set(HttpHeaders.etagHeader, '"entity-v1"')
+          ..headers.set(HttpHeaders.contentRangeHeader, 'bytes $start-$end/9')
+          ..add(bytes);
+      }
+      await request.response.close();
+    });
+    addTearDown(server.close);
+
+    final result =
+        await HttpAudioTransfer(
+          maxRetries: 1,
+          retryDelay: Duration.zero,
+        ).download(
+          uri: server.uri,
+          destination: destination,
+          rangePlan: const HttpAudioRangePlan(
+            totalBytes: 9,
+            maximumChunkBytes: 3,
+            transport: HttpAudioRangeTransport.header,
+          ),
+        );
+
+    expect(result.attempts, 4);
+    expect(await destination.readAsBytes(), payload);
+  });
+
   test('resumes a .part file with a validated byte range', () async {
     final payload = <int>[0x49, 0x44, 0x33, 10, 11, 12, 13, 14, 15, 16];
     const partialLength = 4;

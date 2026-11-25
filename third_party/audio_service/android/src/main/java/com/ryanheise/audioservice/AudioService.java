@@ -42,6 +42,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -104,11 +105,22 @@ public class AudioService extends MediaBrowserServiceCompat {
             | PlaybackStateCompat.ACTION_SET_SHUFFLE_MODE
             | PlaybackStateCompat.ACTION_SET_CAPTIONING_ENABLED;
 
-    static AudioService instance;
+    static volatile AudioService instance;
     private static PendingIntent contentIntent;
     private static ServiceListener listener;
     private static List<MediaSessionCompat.QueueItem> queue = new ArrayList<>();
-    private static final Map<String, MediaMetadataCompat> mediaMetadataCache = new HashMap<>();
+    private static final Map<String, MediaMetadataCompat> mediaMetadataCache =
+            Collections.synchronizedMap(new HashMap<>());
+
+    interface MetadataRequest {
+        boolean isCurrent();
+    }
+
+    private volatile boolean destroyed;
+
+    boolean isActive() {
+        return !destroyed && instance == this;
+    }
 
     public static void init(ServiceListener listener) {
         AudioService.listener = listener;
@@ -168,7 +180,9 @@ public class AudioService extends MediaBrowserServiceCompat {
             }
         }
         MediaMetadataCompat mediaMetadata = builder.build();
-        mediaMetadataCache.put(mediaId, mediaMetadata);
+        synchronized (mediaMetadataCache) {
+            if (isActive()) mediaMetadataCache.put(mediaId, mediaMetadata);
+        }
         return mediaMetadata;
     }
 
@@ -179,6 +193,7 @@ public class AudioService extends MediaBrowserServiceCompat {
     Bitmap loadArtBitmap(String artUriString, String loadThumbnailUri) {
         Bitmap bitmap = artBitmapCache.get(artUriString);
         if (bitmap != null) return bitmap;
+        ParcelFileDescriptor parcelFileDescriptor = null;
         try {
             // There are 3 cases handled by this function:
             //   1. content URI with openFileDescriptor
@@ -204,7 +219,7 @@ public class AudioService extends MediaBrowserServiceCompat {
                             return null;
                         }
                     } else {
-                        ParcelFileDescriptor parcelFileDescriptor = getContentResolver().openFileDescriptor(artUri, "r");
+                        parcelFileDescriptor = getContentResolver().openFileDescriptor(artUri, "r");
                         if (parcelFileDescriptor != null) {
                             fileDescriptor = parcelFileDescriptor.getFileDescriptor();
                         } else {
@@ -243,11 +258,17 @@ public class AudioService extends MediaBrowserServiceCompat {
                     }
                 }
             }
-            artBitmapCache.put(artUriString, bitmap);
+            if (bitmap != null) artBitmapCache.put(artUriString, bitmap);
             return bitmap;
         } catch (Exception e) {
             e.printStackTrace();
             return null;
+        } finally {
+            if (parcelFileDescriptor != null) {
+                try {
+                    parcelFileDescriptor.close();
+                } catch (IOException ignored) { }
+            }
         }
     }
 
@@ -277,7 +298,7 @@ public class AudioService extends MediaBrowserServiceCompat {
     private List<NotificationCompat.Action> nativeActions = new ArrayList<>();
     private List<PlaybackStateCompat.CustomAction> customActions = new ArrayList<>();
     private int[] compactActionIndices;
-    private MediaMetadataCompat mediaMetadata;
+    private volatile MediaMetadataCompat mediaMetadata;
     private Bitmap artBitmap;
     private String notificationChannelId;
     private LruCache<String, Bitmap> artBitmapCache;
@@ -285,6 +306,8 @@ public class AudioService extends MediaBrowserServiceCompat {
     private AudioProcessingState processingState = AudioProcessingState.idle;
     private int repeatMode;
     private int shuffleMode;
+    private boolean captioningEnabled;
+    private boolean sessionModesInitialized;
     private boolean notificationCreated;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private VolumeProviderCompat volumeProvider;
@@ -311,6 +334,8 @@ public class AudioService extends MediaBrowserServiceCompat {
         instance = this;
         repeatMode = 0;
         shuffleMode = 0;
+        captioningEnabled = false;
+        sessionModesInitialized = false;
         notificationCreated = false;
         playing = false;
         processingState = AudioProcessingState.idle;
@@ -373,19 +398,25 @@ public class AudioService extends MediaBrowserServiceCompat {
 
     @Override
     public void onDestroy() {
+        destroyed = true;
         super.onDestroy();
         if (listener != null) {
             listener.onDestroy();
             listener = null;
         }
-        mediaMetadata = null;
-        artBitmap = null;
-        queue.clear();
-        mediaMetadataCache.clear();
-        controls.clear();
-        artBitmapCache.evictAll();
-        compactActionIndices = null;
-        releaseMediaSession();
+        // Only the publication phase of background metadata work holds this
+        // lock. Destruction never waits for its artwork decode.
+        synchronized (this) {
+            handler.removeCallbacksAndMessages(null);
+            mediaMetadata = null;
+            artBitmap = null;
+            queue.clear();
+            mediaMetadataCache.clear();
+            controls = new ArrayList<>();
+            artBitmapCache.evictAll();
+            compactActionIndices = null;
+            releaseMediaSession();
+        }
         ServiceCompat.stopForeground(this, config.androidResumeOnClick ? STOP_FOREGROUND_DETACH : STOP_FOREGROUND_REMOVE);
         // This still does not solve the Android 11 problem.
         // if (notificationCreated) {
@@ -531,36 +562,38 @@ public class AudioService extends MediaBrowserServiceCompat {
     }
 
     void setState(List<MediaControl> controls, long actionBits, int[] compactActionIndices, AudioProcessingState processingState, boolean playing, long position, long bufferedPosition, float speed, long updateTime, Integer errorCode, String errorMessage, int repeatMode, int shuffleMode, boolean captioningEnabled, Long queueIndex) {
-        boolean notificationChanged = false;
-        if (!Arrays.equals(compactActionIndices, this.compactActionIndices)) {
-            notificationChanged = true;
-        }
-        if (!controls.equals(this.controls)) {
-            notificationChanged = true;
-        }
-        this.controls = controls;
-        this.nativeActions.clear();
-        this.customActions.clear();
-        for (MediaControl control : controls) {
-            final PlaybackStateCompat.CustomAction customAction = createCustomAction(control);
-            if (customAction != null) {
-                customActions.add(customAction);
-                // Android 13+ reads PlaybackState custom actions itself. Older
-                // SystemUI needs the matching notification PendingIntent too.
-                if (Build.VERSION.SDK_INT < 33 && control.customAction != null) {
-                    nativeActions.add(createCustomNotificationAction(control));
+        boolean controlsChanged = !controls.equals(this.controls);
+        boolean notificationChanged = controlsChanged ||
+                !Arrays.equals(compactActionIndices, this.compactActionIndices);
+        if (controlsChanged) {
+            this.controls = controls;
+            this.nativeActions.clear();
+            this.customActions.clear();
+            for (MediaControl control : controls) {
+                final PlaybackStateCompat.CustomAction customAction = createCustomAction(control);
+                if (customAction != null) {
+                    customActions.add(customAction);
+                    // Android 13+ reads PlaybackState custom actions itself. Older
+                    // SystemUI needs the matching notification PendingIntent too.
+                    if (Build.VERSION.SDK_INT < 33 && control.customAction != null) {
+                        nativeActions.add(createCustomNotificationAction(control));
+                    }
+                } else {
+                    nativeActions.add(createAction(control.icon, control.label, control.actionCode));
                 }
-            } else {
-                nativeActions.add(createAction(control.icon, control.label, control.actionCode));
             }
         }
         this.compactActionIndices = compactActionIndices;
         boolean wasPlaying = this.playing;
         AudioProcessingState oldProcessingState = this.processingState;
+        boolean repeatChanged = !sessionModesInitialized || this.repeatMode != repeatMode;
+        boolean shuffleChanged = !sessionModesInitialized || this.shuffleMode != shuffleMode;
+        boolean captioningChanged = !sessionModesInitialized || this.captioningEnabled != captioningEnabled;
         this.processingState = processingState;
         this.playing = playing;
         this.repeatMode = repeatMode;
         this.shuffleMode = shuffleMode;
+        this.captioningEnabled = captioningEnabled;
 
         PlaybackStateCompat.Builder stateBuilder = new PlaybackStateCompat.Builder()
                 .setActions(AUTO_ENABLED_ACTIONS | actionBits)
@@ -587,9 +620,10 @@ public class AudioService extends MediaBrowserServiceCompat {
         }
 
         mediaSession.setPlaybackState(stateBuilder.build());
-        mediaSession.setRepeatMode(repeatMode);
-        mediaSession.setShuffleMode(shuffleMode);
-        mediaSession.setCaptioningEnabled(captioningEnabled);
+        if (repeatChanged) mediaSession.setRepeatMode(repeatMode);
+        if (shuffleChanged) mediaSession.setShuffleMode(shuffleMode);
+        if (captioningChanged) mediaSession.setCaptioningEnabled(captioningEnabled);
+        sessionModesInitialized = true;
 
         if (!wasPlaying && playing) {
             enterPlayingState();
@@ -797,7 +831,8 @@ public class AudioService extends MediaBrowserServiceCompat {
      * Updates queue.
      * Gets called from background thread.
      */
-    synchronized void setQueue(List<MediaSessionCompat.QueueItem> queue) {
+    synchronized void setQueue(List<MediaSessionCompat.QueueItem> queue, MetadataRequest request) {
+        if (!request.isCurrent()) return;
         AudioService.queue = queue;
         mediaSession.setQueue(queue);
     }
@@ -818,33 +853,37 @@ public class AudioService extends MediaBrowserServiceCompat {
      *  - https://developer.android.com/guide/topics/media-apps/working-with-a-media-session#album_artwork
      *  - https://9to5google.com/2020/08/02/android-11-lockscreen-art/
      */
-    synchronized void setMetadata(MediaMetadataCompat mediaMetadata) {
+    void setMetadata(MediaMetadataCompat mediaMetadata, MetadataRequest request) {
+        if (!request.isCurrent()) return;
+        Bitmap newArtBitmap = null;
         String artCacheFilePath = mediaMetadata.getString("artCacheFile");
         if (artCacheFilePath != null) {
             // Load local files and network images, cached in files
-            artBitmap = loadArtBitmap(artCacheFilePath, null);
-            mediaMetadata = putArtToMetadata(mediaMetadata);
+            newArtBitmap = loadArtBitmap(artCacheFilePath, null);
+            mediaMetadata = putArtToMetadata(mediaMetadata, newArtBitmap);
         } else {
             // Load content:// URIs
             String artUri = mediaMetadata.getString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI);
             if (artUri != null && artUri.startsWith("content:")) {
                 String loadThumbnailUri = mediaMetadata.getString("loadThumbnailUri");
-                artBitmap = loadArtBitmap(artUri, loadThumbnailUri);
-                mediaMetadata = putArtToMetadata(mediaMetadata);
-            } else {
-                artBitmap = null;
+                newArtBitmap = loadArtBitmap(artUri, loadThumbnailUri);
+                mediaMetadata = putArtToMetadata(mediaMetadata, newArtBitmap);
             }
         }
-        this.mediaMetadata = mediaMetadata;
-        mediaSession.setMetadata(mediaMetadata);
-        handler.removeCallbacksAndMessages(null);
-        handler.post(this::updateNotification);
+        synchronized (this) {
+            if (!request.isCurrent()) return;
+            artBitmap = newArtBitmap;
+            this.mediaMetadata = mediaMetadata;
+            mediaSession.setMetadata(mediaMetadata);
+            handler.removeCallbacksAndMessages(null);
+            handler.post(this::updateNotification);
+        }
     }
 
-    private MediaMetadataCompat putArtToMetadata(MediaMetadataCompat mediaMetadata) {
+    private MediaMetadataCompat putArtToMetadata(MediaMetadataCompat mediaMetadata, Bitmap bitmap) {
         return new MediaMetadataCompat.Builder(mediaMetadata)
-                .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, artBitmap)
-                .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, artBitmap)
+                .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bitmap)
+                .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, bitmap)
                 .build();
     }
 

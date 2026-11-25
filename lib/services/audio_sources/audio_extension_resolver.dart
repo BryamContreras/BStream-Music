@@ -64,14 +64,26 @@ class AudioExtensionResolver {
   static const _manifestTimeout = Duration(milliseconds: 2500);
   static const _searchTimeout = Duration(seconds: 5);
   static const _streamTimeout = Duration(seconds: 4);
-  static const _mediaProbeTimeout = Duration(milliseconds: 2500);
+  static const _mediaProbeTimeout = Duration(seconds: 6);
   static const _lookupTimeout = Duration(seconds: 8);
+  static const _downloadMediaProbeTimeout = Duration(seconds: 18);
+  static const _downloadLookupTimeout = Duration(seconds: 24);
   static const _manifestTtl = Duration(minutes: 10);
+  static const _verifiedStreamTtl = Duration(minutes: 1);
 
   final BoundedAudioHttpTransport _transport;
   final DateTime Function() _now;
   final _manifests = <Uri, ({_Manifest manifest, DateTime expiresAt})>{};
   final _pendingManifests = <Uri, Future<_Manifest>>{};
+  ({
+    Uri manifestUri,
+    String extensionId,
+    String trackId,
+    Duration duration,
+    AudioStreamResolution resolution,
+    DateTime expiresAt,
+  })?
+  _lastVerifiedStream;
   bool _disposed = false;
 
   Future<AudioExtension> load(String url) async {
@@ -223,6 +235,10 @@ class AudioExtensionResolver {
     if (duration == null || duration <= Duration.zero) return null;
     final queries = _matcher.searchQueries(track);
     if (queries.isEmpty) return null;
+    final lookupTimeout = forDownload ? _downloadLookupTimeout : _lookupTimeout;
+    final mediaProbeTimeout = forDownload
+        ? _downloadMediaProbeTimeout
+        : _mediaProbeTimeout;
     bool stillSelected() => !_disposed && (shouldContinue?.call() ?? true);
 
     for (final extension in extensions) {
@@ -232,35 +248,67 @@ class AudioExtensionResolver {
       }
       // A slow preferred source must leave time for the next source.
       final elapsed = Stopwatch()..start();
-      bool current() => stillSelected() && elapsed.elapsed < _lookupTimeout;
+      Duration timeRemaining() => lookupTimeout - elapsed.elapsed;
+      bool current() => stillSelected() && timeRemaining() > Duration.zero;
       try {
-        if (extension.protocol == AudioExtensionProtocol.monochrome) {
-          final resolution = await _findMonochrome(
+        _Manifest? manifest;
+        if (extension.protocol != AudioExtensionProtocol.monochrome) {
+          manifest = await _manifest(
+            extension.manifestUri,
+          ).timeout(timeRemaining());
+          if (!current() ||
+              manifest.extension.id != extension.id ||
+              (forDownload && !manifest.extension.allowDownloads)) {
+            continue;
+          }
+        }
+
+        // Streaming and downloads share this resolver. Reuse a recent FLAC
+        // probe only for the same recording and an eligible download source.
+        final verified = _lastVerifiedStream;
+        if (forDownload &&
+            verified != null &&
+            verified.manifestUri == extension.manifestUri &&
+            verified.extensionId == extension.id &&
+            verified.trackId == track.id &&
+            verified.duration == duration &&
+            _now().isBefore(verified.expiresAt)) {
+          return verified.resolution;
+        }
+
+        final AudioStreamResolution? resolution;
+        if (manifest == null) {
+          resolution = await _findMonochrome(
             extension,
             track,
             queries,
             current: current,
-            timeout: () => _lookupTimeout - elapsed.elapsed,
+            timeout: timeRemaining,
+            probeTimeout: mediaProbeTimeout,
+            forDownload: forDownload,
           );
-          if (current() && resolution != null) return resolution;
-          continue;
+        } else {
+          resolution = await _findRecording(
+            manifest,
+            track,
+            queries,
+            current: current,
+            timeout: timeRemaining,
+            probeTimeout: mediaProbeTimeout,
+          );
         }
-        final manifest = await _manifest(
-          extension.manifestUri,
-        ).timeout(_lookupTimeout - elapsed.elapsed);
-        if (!current()) continue;
-        if (manifest.extension.id != extension.id ||
-            (forDownload && !manifest.extension.allowDownloads)) {
-          continue;
+        if (!current() || resolution == null) continue;
+        if (!forDownload && track.id.isNotEmpty) {
+          _lastVerifiedStream = (
+            manifestUri: extension.manifestUri,
+            extensionId: extension.id,
+            trackId: track.id,
+            duration: duration,
+            resolution: resolution,
+            expiresAt: _now().add(_verifiedStreamTtl),
+          );
         }
-        final resolution = await _findRecording(
-          manifest,
-          track,
-          queries,
-          current: current,
-          timeout: () => _lookupTimeout - elapsed.elapsed,
-        );
-        if (current() && resolution != null) return resolution;
+        return resolution;
       } on Exception {
         // An optional source can miss, time out or become unavailable while
         // the already-selected stream continues playing.
@@ -310,6 +358,7 @@ class AudioExtensionResolver {
     List<String> queries, {
     required bool Function() current,
     required Duration Function() timeout,
+    required Duration probeTimeout,
   }) async {
     final attempted = <String>{};
     for (final query in queries) {
@@ -378,7 +427,7 @@ class AudioExtensionResolver {
             duration: track.duration!,
             formatId: sha256.convert(utf8.encode(identity)).toString(),
             headers: _mediaHeaders(stream?['headers']),
-            timeout: timeout(),
+            timeout: _limitTimeout(timeout(), probeTimeout),
           );
           if (audio != null) return audio;
         } on AudioExtensionException catch (error) {
@@ -397,6 +446,8 @@ class AudioExtensionResolver {
     List<String> queries, {
     required bool Function() current,
     required Duration Function() timeout,
+    required Duration probeTimeout,
+    required bool forDownload,
   }) async {
     final attempted = <String>{};
     for (final query in queries) {
@@ -422,7 +473,11 @@ class AudioExtensionResolver {
               'User-Agent': _appUserAgent,
               'Accept': 'audio/flac, application/octet-stream, */*',
             },
-            timeout: timeout(),
+            timeout: _limitTimeout(timeout(), probeTimeout),
+            // Monochrome can send range headers promptly and stall before the
+            // first bytes. Probe the same GET used by the full download, then
+            // close it as soon as STREAMINFO has arrived.
+            requestRange: !forDownload,
           );
           if (audio != null) return audio;
         } on Exception {
@@ -473,15 +528,16 @@ class AudioExtensionResolver {
     required String formatId,
     required Map<String, String> headers,
     required Duration timeout,
+    bool requestRange = true,
   }) async {
     final result = await _get(
       uri,
       headers: {
         ...headers,
-        'Range': 'bytes=0-${FlacStreamInfo.prefixLength - 1}',
+        if (requestRange) 'Range': 'bytes=0-${FlacStreamInfo.prefixLength - 1}',
         'Accept-Encoding': 'identity',
       },
-      timeout: _limitTimeout(timeout, _mediaProbeTimeout),
+      timeout: timeout,
       probe: true,
     );
     final response = result.response;
@@ -530,6 +586,11 @@ class AudioExtensionResolver {
       sampleRate: info.sampleRate,
       channels: info.channels,
       bitDepth: info.bitDepth,
+      rangedContentLength:
+          response.statusCode == 206 ||
+              response.headers['accept-ranges']?.toLowerCase() == 'bytes'
+          ? length
+          : null,
       httpHeaders: Map.unmodifiable({
         for (final key in headers.keys)
           if (result.headers.containsKey(key)) key: result.headers[key]!,
@@ -581,6 +642,7 @@ class AudioExtensionResolver {
     _disposed = true;
     _manifests.clear();
     _pendingManifests.clear();
+    _lastVerifiedStream = null;
     await _transport.close();
   }
 }

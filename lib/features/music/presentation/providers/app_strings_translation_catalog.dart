@@ -1387,6 +1387,13 @@ const Map<String, List<String>> _appStringTranslations = <String, List<String>>{
     '下载音频',
     'オーディオをダウンロード',
   ],
+  'Could not complete the FLAC download. Try again.': <String>[
+    'Não foi possível concluir o download em FLAC. Tente novamente.',
+    'Le téléchargement FLAC a échoué. Réessayez.',
+    'FLAC 다운로드를 완료하지 못했습니다. 다시 시도해 주세요.',
+    'FLAC 下载未完成。请重试。',
+    'FLAC のダウンロードを完了できませんでした。もう一度お試しください。',
+  ],
   'Cancel download': <String>[
     'Cancelar download',
     'Annuler le téléchargement',

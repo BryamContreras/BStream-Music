@@ -14,16 +14,24 @@ class ArtworkGradientHeaderBackground extends ConsumerWidget {
     required this.artworkSource,
     required this.cacheWidth,
     required this.keyPrefix,
-    this.backgroundArtwork,
+    this.backgroundArtworkBuilder,
+    this.backgroundArtworkRevision,
+    this.backgroundArtworkFrameCount = 1,
     super.key,
-  });
+  }) : assert(backgroundArtworkFrameCount > 0),
+       assert(
+         backgroundArtworkBuilder == null || backgroundArtworkRevision != null,
+       );
 
   final String? artworkSource;
   final int cacheWidth;
   final String keyPrefix;
 
   /// Optional composite artwork; color extraction still shares [artworkSource].
-  final Widget? backgroundArtwork;
+  final Widget Function(ArtworkSnapshotFrame? onFrame)?
+  backgroundArtworkBuilder;
+  final Object? backgroundArtworkRevision;
+  final int backgroundArtworkFrameCount;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -31,7 +39,7 @@ class ArtworkGradientHeaderBackground extends ConsumerWidget {
     final colors = Theme.of(context).colorScheme;
     final isDark = colors.brightness == Brightness.dark;
     final surfaceColors = _artworkSurfaceColors(context, ref, source);
-    Widget header(ValueChanged<ui.Image?>? onFrame) => ClipRect(
+    Widget header(ArtworkSnapshotFrame? onFrame) => ClipRect(
       key: ValueKey('$keyPrefix-background-photo'),
       // Reveal the existing page gradient instead of ending on a fixed color.
       // This stays continuous at every header height and while it scrolls.
@@ -74,7 +82,7 @@ class ArtworkGradientHeaderBackground extends ConsumerWidget {
                       child: Transform.scale(
                         scale: 1.16,
                         child:
-                            backgroundArtwork ??
+                            backgroundArtworkBuilder?.call(onFrame) ??
                             SourceImage(
                               key: ValueKey('$keyPrefix-background-image'),
                               source: source,
@@ -118,11 +126,19 @@ class ArtworkGradientHeaderBackground extends ConsumerWidget {
         ),
       ),
     );
-    if (source == null || source.isEmpty || backgroundArtwork != null) {
+    if (source == null || source.isEmpty) {
       return header(null);
     }
     return ArtworkHeaderSnapshot(
-      revision: (source, cacheWidth, colors.surface, isDark, surfaceColors.top),
+      revision: (
+        source,
+        cacheWidth,
+        colors.surface,
+        isDark,
+        surfaceColors.top,
+        backgroundArtworkRevision,
+      ),
+      frameCount: backgroundArtworkFrameCount,
       builder: (_, onFrame) => header(onFrame),
     );
   }

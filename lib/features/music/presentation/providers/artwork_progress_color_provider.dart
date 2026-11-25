@@ -186,7 +186,7 @@ class ArtworkProgressColorService {
   ) async {
     final provider =
         imageProviderForSource?.call(source) ??
-        _defaultImageProviderForSource(source);
+        await _defaultImageProviderForSource(source);
     if (provider == null) {
       return null;
     }
@@ -202,12 +202,14 @@ class ArtworkProgressColorService {
     }
   }
 
-  ImageProvider<Object>? _defaultImageProviderForSource(String source) {
+  Future<ImageProvider<Object>?> _defaultImageProviderForSource(
+    String source,
+  ) async {
     if (isNetworkImageSource(source)) {
       return ResizeImage(CachedArtworkImageProvider(source), width: 32);
     }
     final file = imageFileFromSource(source);
-    if (file != null && file.existsSync()) {
+    if (file != null && await file.exists()) {
       // Color extraction only samples a 24 px image. Bound local artwork at
       // decode time too, otherwise a multi-megapixel downloaded cover can be
       // decoded in full just as the player starts its track transition.

@@ -377,6 +377,8 @@ class _WordParagraph {
   late final List<_WordBoxes> tokens;
   late final Duration lastEnd;
   ui.Image? _foregroundImage;
+  final Paint _foregroundImagePaint = Paint()
+    ..filterQuality = FilterQuality.low;
   Rect? _foregroundBounds;
   bool _disposed = false;
 
@@ -424,7 +426,7 @@ class _WordParagraph {
       image,
       Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
       _foregroundBounds!,
-      Paint()..filterQuality = FilterQuality.low,
+      _foregroundImagePaint,
     );
   }
 
@@ -455,6 +457,7 @@ class _WordTimingPainter extends CustomPainter {
   final _WordParagraph paragraph;
   final _WordPaintClock clock;
   final bool reducedMotion;
+  final Path _clip = Path();
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -466,7 +469,7 @@ class _WordTimingPainter extends CustomPainter {
     paragraph.background.paint(canvas, Offset.zero);
     final firstStart = paragraph.tokens.first.word.start;
     if (reducedMotion ? position < firstStart : position <= firstStart) return;
-    final clip = Path();
+    final clip = _clip..reset();
     for (final token in paragraph.tokens) {
       final word = token.word;
       if (position < word.start) break;

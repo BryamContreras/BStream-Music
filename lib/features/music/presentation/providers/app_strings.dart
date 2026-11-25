@@ -426,6 +426,10 @@ class AppStrings {
   String get next => choose('Siguiente', 'Next');
   String get download => choose('Descargar', 'Download');
   String get downloadAudio => choose('Descargar audio', 'Download audio');
+  String get flacDownloadInterrupted => choose(
+    'No se pudo completar el FLAC. Inténtalo de nuevo.',
+    'Could not complete the FLAC download. Try again.',
+  );
   String get cancelDownload => choose('Cancelar descarga', 'Cancel download');
   String get cancelDownloads =>
       choose('Cancelar descargas', 'Cancel downloads');

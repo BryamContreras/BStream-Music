@@ -123,6 +123,8 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   TrackInfo? _previousRemoteTrackForCache;
   PlayerSnapshot? _pendingRemoteSnapshot;
   QualifiedPlaybackHistoryTracker? _playbackHistoryTracker;
+  Object? _historyMetadataKey;
+  PlaybackHistoryTrack? _historyMetadata;
   LocalDatabaseShutdownRegistration? _playbackHistoryShutdownRegistration;
   bool _recommendationHistorySuspended = false;
   final RemotePrefetchCoordinator _remotePrefetch;
@@ -4400,7 +4402,9 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
   }
 
   void _observePlaybackHistory(PlayerSnapshot snapshot) {
-    _playbackHistoryTracker?.update(
+    final tracker = _playbackHistoryTracker;
+    if (tracker == null || !tracker.isEnabled) return;
+    tracker.update(
       track: _playbackHistoryTrackFor(snapshot),
       status: snapshot.status,
     );
@@ -4415,42 +4419,61 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
 
     final item = _queue[_queueIndex];
     final local = item.local;
-    if (local != null &&
+    final remote = item.remote;
+    final matchesLocal =
+        local != null &&
         (snapshot.trackId == local.id ||
-            (item.remote != null &&
-                _snapshotBelongsToTrack(snapshot, item.remote!)))) {
-      return PlaybackHistoryTrackFactory.local(
-        snapshot: snapshot.copyWith(trackId: local.id, isRemote: false),
+            (remote != null && _snapshotBelongsToTrack(snapshot, remote)));
+    final usesLocal = local != null && (matchesLocal || remote == null);
+    final favorite =
+        usesLocal && ref.read(favoriteTrackIdsProvider).contains(local.id);
+    final remoteEntryId = usesLocal ? null : _currentRemoteQueueEntryId;
+    // Position, playback status, intent and volume don't affect the catalog
+    // metadata. Reuse the canonical artists, video id and history record
+    // until the queue item, fallback source information or local favorite
+    // state actually changes; keep observing every status for qualification.
+    final metadataKey = (
+      item: item,
+      localSourceId: _activeLocalQueueSourceId,
+      request: _playRequestId,
+      index: _queueIndex,
+      remoteEntryId: remoteEntryId,
+      favorite: favorite,
+      snapshotTrackId: snapshot.trackId,
+      snapshotEntryId: snapshot.queueEntryId,
+      sourceUrl: snapshot.sourceUrl,
+      title: snapshot.title,
+      album: snapshot.album,
+      thumbnail: snapshot.thumbnailUrl,
+      duration: snapshot.duration,
+      isRemote: snapshot.isRemote,
+    );
+    if (_historyMetadataKey == metadataKey) return _historyMetadata;
+
+    PlaybackHistoryTrack? metadata;
+    if (usesLocal) {
+      metadata = PlaybackHistoryTrackFactory.local(
+        snapshot:
+            matchesLocal && (snapshot.trackId != local.id || snapshot.isRemote)
+            ? snapshot.copyWith(trackId: local.id, isRemote: false)
+            : snapshot,
         track: local,
         playRequestId: _playRequestId,
         queueIndex: _queueIndex,
         queueSourceId: _activeLocalQueueSourceId,
         playlistId: _playlistIdFromQueueSourceId(_activeLocalQueueSourceId),
-        isFavorite: ref.read(favoriteTrackIdsProvider).contains(local.id),
+        isFavorite: favorite,
       );
-    }
-
-    final remote = item.remote;
-    if (remote != null) {
-      return PlaybackHistoryTrackFactory.remote(
+    } else if (remote != null) {
+      metadata = PlaybackHistoryTrackFactory.remote(
         snapshot: snapshot,
         track: remote,
-        expectedQueueEntryId: _currentRemoteQueueEntryId,
+        expectedQueueEntryId: remoteEntryId,
       );
     }
-
-    if (local == null) {
-      return null;
-    }
-    return PlaybackHistoryTrackFactory.local(
-      snapshot: snapshot,
-      track: local,
-      playRequestId: _playRequestId,
-      queueIndex: _queueIndex,
-      queueSourceId: _activeLocalQueueSourceId,
-      playlistId: _playlistIdFromQueueSourceId(_activeLocalQueueSourceId),
-      isFavorite: ref.read(favoriteTrackIdsProvider).contains(local.id),
-    );
+    _historyMetadataKey = metadataKey;
+    _historyMetadata = metadata;
+    return metadata;
   }
 
   /// Quiesces pending writes before recommendation rows are deleted.
@@ -4537,6 +4560,9 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
         thumbnailUrl: _stableRemoteThumbnail(remote, snapshot.thumbnailUrl),
         duration: remote.duration ?? snapshot.duration,
         isRemote: true,
+        playWhenReady: _playWhenReady,
+        shuffleEnabled: _shuffleEnabled,
+        repeatMode: _repeatMode,
       );
     }
 
@@ -4567,6 +4593,11 @@ class PlayerController extends AsyncNotifier<PlayerSnapshot> {
       );
     }
 
+    if (snapshot.playWhenReady == _playWhenReady &&
+        snapshot.shuffleEnabled == _shuffleEnabled &&
+        snapshot.repeatMode == _repeatMode) {
+      return snapshot;
+    }
     return snapshot.copyWith(
       playWhenReady: _playWhenReady,
       shuffleEnabled: _shuffleEnabled,

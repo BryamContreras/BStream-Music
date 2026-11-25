@@ -12,6 +12,7 @@ import '../../features/music/domain/entities/download_options.dart';
 import '../../features/music/domain/entities/download_result.dart';
 import '../../features/music/domain/entities/track_info.dart';
 import '../audio_sources/audio_format_details.dart';
+import '../audio_sources/flac_stream_info.dart';
 import '../youtube_music/innertube_search_service.dart';
 import '../youtube_music/playback/innertube_playback_service.dart';
 import '../youtube_music/playback/innertube_video_id.dart';
@@ -49,6 +50,7 @@ final class InnerTubeDownloadService
 
   static const Uuid _uuid = Uuid();
   static const int _maximumCdnChunkBytes = 8 * 1024 * 1024;
+  static const int _maximumLosslessChunkBytes = 4 * 1024 * 1024;
   static const Duration _cancelledTaskRetention = Duration(minutes: 5);
 
   final InnerTubePlaybackService playback;
@@ -238,10 +240,19 @@ final class InnerTubeDownloadService
             metadata: options.track ?? metadata,
             destinationPaths: destinationPaths,
           );
-        } on HttpAudioTransferException {
+        } on HttpAudioTransferException catch (error) {
           _ensureTaskActive(taskId);
-          // A failed optional CDN must not prevent the verified YouTube
-          // download. Keep its untouched source ready as the fallback.
+          if (upgrade.source == AudioStreamSource.audioExtension) {
+            // A verified FLAC is the selected format for this attempt. Keep
+            // its partial and validator so the next attempt can resume it.
+            throw DownloaderException(
+              'No se pudo completar el FLAC. Inténtalo de nuevo.',
+              code: 'flac_download_interrupted',
+              details: error,
+            );
+          }
+          // The standard source can still cover an unsuccessful JioSaavn
+          // upgrade. Its bytes use a separate destination.
           await _deleteTransferArtifacts(destinationPaths);
           destinationPaths.clear();
         }
@@ -428,29 +439,84 @@ final class InnerTubeDownloadService
     final destination = await _availableDestination(
       directory,
       '$name-$variant',
-      source.streamExtension ?? 'm4a',
+      extension ? 'flac' : source.streamExtension ?? 'm4a',
     );
     destinationPaths.add(destination.path);
-    final result = await _transfer.download(
-      uri: Uri.parse(source.streamUrl),
-      destination: destination,
-      headers: source.httpHeaders ?? const {},
-      isCancelled: () => _disposed || _isTaskCancelled(taskId),
-      cancellationEvents: _cancellationFor(taskId),
-      onProgress: (progress) {
-        if (_disposed || _isTaskCancelled(taskId)) return;
-        _emit(
-          DownloadProgress(
-            taskId: taskId,
-            url: url,
-            status: DownloadProgressStatus.running,
-            progress: progress.fraction,
-            message: providerName,
-          ),
+    final contentLength = source.rangedContentLength;
+    final rangePlan =
+        extension &&
+            contentLength != null &&
+            contentLength > _maximumLosslessChunkBytes
+        ? HttpAudioRangePlan(
+            totalBytes: contentLength,
+            maximumChunkBytes: _maximumLosslessChunkBytes,
+            transport: HttpAudioRangeTransport.header,
+          )
+        : null;
+    Future<HttpAudioTransferResult> transfer(HttpAudioRangePlan? plan) =>
+        _transfer.download(
+          uri: Uri.parse(source.streamUrl),
+          destination: destination,
+          headers: source.httpHeaders ?? const {},
+          rangePlan: plan,
+          isCancelled: () => _disposed || _isTaskCancelled(taskId),
+          cancellationEvents: _cancellationFor(taskId),
+          onProgress: (progress) {
+            if (_disposed || _isTaskCancelled(taskId)) return;
+            _emit(
+              DownloadProgress(
+                taskId: taskId,
+                url: url,
+                status: DownloadProgressStatus.running,
+                progress: progress.fraction,
+                message: providerName,
+              ),
+            );
+          },
         );
-      },
-    );
+
+    HttpAudioTransferResult result;
+    try {
+      result = await transfer(rangePlan);
+    } on HttpAudioTransferException catch (error) {
+      if (rangePlan == null ||
+          (error.kind != HttpAudioTransferFailureKind.invalidRange &&
+              error.statusCode != HttpStatus.requestedRangeNotSatisfiable)) {
+        rethrow;
+      }
+      _ensureTaskActive(taskId);
+      // Some CDNs reject a fixed range while allowing a regular GET or an
+      // open-ended resume. Let the same transfer validate the existing part.
+      result = await transfer(null);
+    }
     _ensureTaskActive(taskId);
+    if (extension) {
+      // A CDN can respond differently to a prefix probe and a full GET.
+      // Verify the saved file before publishing the download as lossless.
+      final file = await result.file.open();
+      final FlacStreamInfo? info;
+      try {
+        info = FlacStreamInfo.fromPrefix(
+          await file.read(FlacStreamInfo.prefixLength),
+        );
+      } finally {
+        await file.close();
+      }
+      _ensureTaskActive(taskId);
+      if (result.length <= FlacStreamInfo.prefixLength ||
+          (contentLength != null && result.length != contentLength) ||
+          info == null ||
+          info.sampleCount <= 0 ||
+          info.bitDepth != source.bitDepth ||
+          info.sampleRate != source.sampleRate ||
+          info.channels != source.channels) {
+        await _deleteFileBestEffort(result.file.path);
+        throw const HttpAudioTransferException(
+          'The downloaded audio did not match the verified CD FLAC.',
+          kind: HttpAudioTransferFailureKind.invalidContent,
+        );
+      }
+    }
     _emit(
       DownloadProgress(
         taskId: taskId,

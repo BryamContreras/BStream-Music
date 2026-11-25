@@ -2251,11 +2251,23 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline>
   TextScaler? _measuredTextScaler;
   TextDirection? _measuredTextDirection;
   Locale? _measuredLocale;
+  ({
+    String source,
+    String seekHint,
+    double width,
+    String? fontFamily,
+    TextScaler scaler,
+    TextDirection direction,
+    Locale? locale,
+  })?
+  _guidanceKey;
+  double _guidanceExtent = 0;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    PaintingBinding.instance.systemFonts.addListener(_handleSystemFontsChanged);
     final lifecycle = WidgetsBinding.instance.lifecycleState;
     _appActive = lifecycle == null || lifecycle == AppLifecycleState.resumed;
     final injectedClock = widget.monotonicClock;
@@ -2367,6 +2379,9 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    PaintingBinding.instance.systemFonts.removeListener(
+      _handleSystemFontsChanged,
+    );
     _playbackSubscription?.close();
     _wordPlayback.dispose();
     _cancelLineBoundaryTimer();
@@ -2586,6 +2601,13 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline>
     _measuredLocale = null;
   }
 
+  void _handleSystemFontsChanged() {
+    setState(() {
+      _invalidateLineMetrics();
+      _guidanceKey = null;
+    });
+  }
+
   bool _ensureLineMetrics({
     required double contentWidth,
     required double activeFontSize,
@@ -2721,19 +2743,31 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline>
           textDirection: textDirection,
           locale: locale,
         );
-        final guidanceExtent = _measureSyncedLyricsGuidanceExtent(
+        final guidanceKey = (
           source: widget.sourceFooter,
           seekHint: strings.tapLyricsToSeek,
-          contentWidth: contentWidth,
+          width: contentWidth,
           fontFamily: fontFamily,
-          textScaler: textScaler,
-          textDirection: textDirection,
+          scaler: textScaler,
+          direction: textDirection,
           locale: locale,
         );
+        if (_guidanceKey != guidanceKey) {
+          _guidanceKey = guidanceKey;
+          _guidanceExtent = _measureSyncedLyricsGuidanceExtent(
+            source: guidanceKey.source,
+            seekHint: guidanceKey.seekHint,
+            contentWidth: guidanceKey.width,
+            fontFamily: guidanceKey.fontFamily,
+            textScaler: guidanceKey.scaler,
+            textDirection: guidanceKey.direction,
+            locale: guidanceKey.locale,
+          );
+        }
         _syncLayoutMetrics(
           nextLayoutWidth: constraints.maxWidth,
           nextViewportHeight: constraints.maxHeight,
-          linesStartOffset: verticalPadding + guidanceExtent + 12,
+          linesStartOffset: verticalPadding + _guidanceExtent + 12,
           lineExtents: _lineExtents,
           lineOffsets: _lineOffsets,
           metricsChanged: metricsChanged,
@@ -2759,7 +2793,7 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline>
                 ),
                 sliver: SliverToBoxAdapter(
                   child: SizedBox(
-                    height: guidanceExtent,
+                    height: _guidanceExtent,
                     child: _SyncedLyricsGuidance(
                       source: widget.sourceFooter,
                       placement: 'top',
@@ -2851,7 +2885,7 @@ class _SyncedLyricsTimelineState extends ConsumerState<_SyncedLyricsTimeline>
                 ),
                 sliver: SliverToBoxAdapter(
                   child: SizedBox(
-                    height: guidanceExtent,
+                    height: _guidanceExtent,
                     child: _SyncedLyricsGuidance(
                       source: widget.sourceFooter,
                       placement: 'bottom',

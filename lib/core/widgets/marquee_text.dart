@@ -48,6 +48,7 @@ class _MarqueeTextState extends State<MarqueeText> with WidgetsBindingObserver {
   AnimationController? _controller;
   Timer? _startTimer;
   ScrollNotificationObserverState? _scrollNotificationObserver;
+  List<ScrollableState>? _ancestorScrollables;
   bool _observingScroll = false;
 
   double _overflow = 0;
@@ -88,6 +89,7 @@ class _MarqueeTextState extends State<MarqueeText> with WidgetsBindingObserver {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final observer = ScrollNotificationObserver.maybeOf(context);
+    _ancestorScrollables = null;
     if (observer != _scrollNotificationObserver) {
       if (_observingScroll) {
         _scrollNotificationObserver?.removeListener(_handleScrollNotification);
@@ -309,12 +311,17 @@ class _MarqueeTextState extends State<MarqueeText> with WidgetsBindingObserver {
   void _syncScrollObservation() {
     // Short labels and inactive routes have no animation to reveal. They do
     // not need one geometry check per scroll frame from the global observer.
-    final shouldObserve =
+    final canObserve =
         _scrollNotificationObserver != null &&
         _overflow > 0 &&
         _appActive &&
         _tickerEnabled &&
         !_reducedMotion;
+    if (canObserve) {
+      _ancestorScrollables ??= _findAncestorScrollables();
+    }
+    final shouldObserve =
+        canObserve && _ancestorScrollables?.isNotEmpty == true;
     if (shouldObserve == _observingScroll) return;
     if (shouldObserve) {
       _scrollNotificationObserver!.addListener(_handleScrollNotification);
@@ -322,6 +329,20 @@ class _MarqueeTextState extends State<MarqueeText> with WidgetsBindingObserver {
       _scrollNotificationObserver?.removeListener(_handleScrollNotification);
     }
     _observingScroll = shouldObserve;
+  }
+
+  List<ScrollableState> _findAncestorScrollables() {
+    final scrollables = <ScrollableState>[];
+    // Include both a horizontal shelf and the outer vertical viewport. Their
+    // sibling shelves and the viewport behind a pinned mini never move this
+    // label, so they don't need to trigger its geometry walk.
+    context.visitAncestorElements((ancestor) {
+      if (ancestor case StatefulElement(state: final ScrollableState state)) {
+        scrollables.add(state);
+      }
+      return true;
+    });
+    return scrollables;
   }
 
   bool get _animationEnabled =>
@@ -333,7 +354,15 @@ class _MarqueeTextState extends State<MarqueeText> with WidgetsBindingObserver {
       !_reducedMotion;
 
   void _handleScrollNotification(ScrollNotification notification) {
-    _scheduleVisibilityCheck();
+    final source = notification.context;
+    if (source == null) return;
+    for (final scrollable
+        in _ancestorScrollables ?? const <ScrollableState>[]) {
+      if (identical(scrollable.notificationContext, source)) {
+        _scheduleVisibilityCheck();
+        return;
+      }
+    }
   }
 
   void _scheduleVisibilityCheck() {

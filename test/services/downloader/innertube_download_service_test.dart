@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:bstream_music/core/errors/app_exception.dart';
 import 'package:bstream_music/features/music/domain/entities/download_options.dart';
@@ -67,42 +68,104 @@ void main() {
     },
   );
 
-  test('keeps verified CD FLAC even if its bitrate was not provided', () async {
-    final transfer = _UpgradeRecordingTransfer();
+  for (final validFlac in [true, false]) {
+    test(
+      'saves CD FLAC only when the full response matches ($validFlac)',
+      () async {
+        final transfer = _UpgradeRecordingTransfer(validFlac: validFlac);
+        final fixture = await _upgradeFixture(
+          transfer,
+          (url, metadata, baseline, current) async => _flacUpgrade,
+        );
+        final download = fixture.downloader.downloadAudio(
+          'dQw4w9WgXcQ',
+          DownloadOptions(
+            outputDirectory: fixture.directory.path,
+            fileName: 'Song',
+          ),
+        );
+        if (!validFlac) {
+          await expectLater(download, throwsA(_flacFailure));
+          expect(transfer.requests, [_flacUpgrade.streamUrl]);
+          expect(await fixture.directory.list().toList(), isEmpty);
+          return;
+        }
+        final result = await download;
+        final range = transfer.firstRangePlan;
+        expect(range?.totalBytes, _flacLength);
+        expect(range?.maximumChunkBytes, 4 * 1024 * 1024);
+        expect(range?.transport, HttpAudioRangeTransport.header);
+        expect(transfer.requests, ['https://addon.example/song.flac']);
+        expect(result.fileName, 'Song-cd-5f54e2dc321c.flac');
+        expect(
+          result.audioFormat,
+          const AudioFormatDetails(
+            codec: 'flac',
+            mimeType: 'audio/flac',
+            sampleRate: 44100,
+            channels: 2,
+            bitDepth: 16,
+          ),
+        );
+      },
+    );
+  }
+
+  test('keeps interrupted FLAC bytes for a later attempt', () async {
+    final transfer = _UpgradeRecordingTransfer()..interruptFlac = true;
     final fixture = await _upgradeFixture(
       transfer,
-      (url, metadata, baseline, current) async => const AudioStreamResolution(
-        source: AudioStreamSource.audioExtension,
-        streamUrl: 'https://addon.example/song.flac',
-        streamExtension: 'flac',
-        streamMimeType: 'audio/flac',
-        formatId: '5f54e2dc321c89e3',
-        codec: 'flac',
-        sampleRate: 44100,
-        channels: 2,
-        bitDepth: 16,
-      ),
+      (url, metadata, baseline, current) async => _flacUpgrade,
     );
+    final options = DownloadOptions(
+      outputDirectory: fixture.directory.path,
+      fileName: 'Song',
+    );
+    await expectLater(
+      fixture.downloader.downloadAudio('dQw4w9WgXcQ', options),
+      throwsA(_flacFailure),
+    );
+    expect(transfer.requests, [_flacUpgrade.streamUrl]);
+    final part = File(
+      '${fixture.directory.path}/Song-cd-5f54e2dc321c.flac.part',
+    );
+    expect(await part.readAsBytes(), 'fLaC'.codeUnits);
+
+    transfer.interruptFlac = false;
     final result = await fixture.downloader.downloadAudio(
       'dQw4w9WgXcQ',
-      DownloadOptions(
-        outputDirectory: fixture.directory.path,
-        fileName: 'Song',
-      ),
+      options,
     );
-    expect(transfer.requests, ['https://addon.example/song.flac']);
+    expect(transfer.reusedFlacPart, isTrue);
     expect(result.fileName, 'Song-cd-5f54e2dc321c.flac');
-    expect(
-      result.audioFormat,
-      const AudioFormatDetails(
-        codec: 'flac',
-        mimeType: 'audio/flac',
-        sampleRate: 44100,
-        channels: 2,
-        bitDepth: 16,
-      ),
-    );
+    expect(await part.exists(), isFalse);
   });
+
+  test(
+    'retries FLAC without fixed blocks if the server rejects its range',
+    () async {
+      final transfer = _UpgradeRecordingTransfer()..rejectFixedRange = true;
+      final fixture = await _upgradeFixture(
+        transfer,
+        (url, metadata, baseline, current) async => _flacUpgrade,
+      );
+
+      final result = await fixture.downloader.downloadAudio(
+        'dQw4w9WgXcQ',
+        DownloadOptions(
+          outputDirectory: fixture.directory.path,
+          fileName: 'Song',
+        ),
+      );
+
+      expect(transfer.firstRangePlan, isNotNull);
+      expect(transfer.requests, [
+        _flacUpgrade.streamUrl,
+        _flacUpgrade.streamUrl,
+      ]);
+      expect(result.fileName, 'Song-cd-5f54e2dc321c.flac');
+    },
+  );
 
   for (final mode in [
     'unavailable',
@@ -724,6 +787,26 @@ AudioStreamResolution _upgrade({int bitrate = 320000}) => AudioStreamResolution(
   channels: 2,
 );
 
+const _flacLength = 4 * 1024 * 1024 + 64;
+const _flacUpgrade = AudioStreamResolution(
+  source: AudioStreamSource.audioExtension,
+  streamUrl: 'https://addon.example/song.flac',
+  streamExtension: 'flac',
+  streamMimeType: 'audio/flac',
+  formatId: '5f54e2dc321c89e3',
+  codec: 'flac',
+  sampleRate: 44100,
+  channels: 2,
+  bitDepth: 16,
+  rangedContentLength: _flacLength,
+);
+
+final _flacFailure = isA<DownloaderException>().having(
+  (error) => error.code,
+  'code',
+  'flac_download_interrupted',
+);
+
 Future<
   ({InnerTubeDownloadService downloader, Directory directory, _Catalog catalog})
 >
@@ -758,9 +841,15 @@ _upgradeFixture(
 }
 
 class _UpgradeRecordingTransfer extends HttpAudioTransfer {
-  _UpgradeRecordingTransfer({this.failUpgrade = false}) : super(maxRetries: 0);
+  _UpgradeRecordingTransfer({this.failUpgrade = false, this.validFlac = true})
+    : super(maxRetries: 0);
   final bool failUpgrade;
+  final bool validFlac;
   final requests = <String>[];
+  HttpAudioRangePlan? firstRangePlan;
+  bool interruptFlac = false;
+  bool rejectFixedRange = false;
+  bool reusedFlacPart = false;
 
   @override
   Future<HttpAudioTransferResult> download({
@@ -772,6 +861,7 @@ class _UpgradeRecordingTransfer extends HttpAudioTransfer {
     HttpAudioTransferCancellationCallback? isCancelled,
     Stream<void>? cancellationEvents,
   }) async {
+    if (requests.isEmpty) firstRangePlan = rangePlan;
     requests.add(uri.toString());
     if (uri.host == 'jio.example' && failUpgrade) {
       await File('${destination.path}.part').writeAsBytes([9]);
@@ -781,7 +871,37 @@ class _UpgradeRecordingTransfer extends HttpAudioTransfer {
         statusCode: 403,
       );
     }
-    final bytes = uri.host == 'jio.example' ? [3, 2, 0] : [1, 2, 8];
+    final List<int> bytes;
+    if (uri.host == 'addon.example' && validFlac) {
+      if (rejectFixedRange && rangePlan != null) {
+        throw const HttpAudioTransferException(
+          'The audio server returned a different byte range than requested.',
+          kind: HttpAudioTransferFailureKind.invalidRange,
+        );
+      }
+      final part = HttpAudioTransfer.partialFileFor(destination);
+      if (interruptFlac) {
+        await part.writeAsBytes('fLaC'.codeUnits);
+        throw const HttpAudioTransferException(
+          'The audio response was idle for too long.',
+          kind: HttpAudioTransferFailureKind.idleTimeout,
+        );
+      }
+      if (await part.exists()) {
+        reusedFlacPart = true;
+        await part.delete();
+      }
+      final flac = Uint8List(_flacLength)
+        ..setAll(0, 'fLaC'.codeUnits)
+        ..[4] = 0x80
+        ..[7] = 34;
+      ByteData.sublistView(
+        flac,
+      ).setUint64(18, (44100 << 44) | (1 << 41) | (15 << 36) | (180 * 44100));
+      bytes = flac;
+    } else {
+      bytes = uri.host == 'jio.example' ? [3, 2, 0] : [1, 2, 8];
+    }
     await destination.writeAsBytes(bytes);
     return HttpAudioTransferResult(
       file: destination,

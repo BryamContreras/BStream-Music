@@ -13,20 +13,35 @@ uniform vec2 u_surface_size_px;
 uniform vec2 u_surface_origin_px;
 uniform float u_band_ratio;
 uniform float u_amount_ratio;
+#ifndef BSTREAM_BOTTOM_EDGE
 uniform float u_depth_effect;
 uniform float u_chromatic_aberration;
 uniform float u_radius_top_left;
 uniform float u_radius_top_right;
 uniform float u_radius_bottom_right;
 uniform float u_radius_bottom_left;
+#else
+const float u_depth_effect = 0.0;
+const float u_chromatic_aberration = 0.0;
+const float u_radius_top_left = 0.0;
+const float u_radius_top_right = 0.0;
+const float u_radius_bottom_right = 0.0;
+const float u_radius_bottom_left = 0.0;
+#endif
 uniform float u_saturation;
 uniform float u_edge_gain;
+#ifndef BSTREAM_BOTTOM_EDGE
 uniform float u_edge_mode;
 // Opt-in fixed-envelope mode owns the contour; native clipped lenses use 0.
 uniform float u_shape_mask;
 // Only the navigation droplet opts into a broad convex interior. Other glass
 // surfaces keep zero, retaining their original calm centre and optical cost.
 uniform float u_lens_bulge;
+#else
+const float u_edge_mode = 1.0;
+const float u_shape_mask = 0.0;
+const float u_lens_bulge = 0.0;
+#endif
 #ifdef BSTREAM_GRADIENT_BACKDROP
 uniform vec3 u_background_top;
 uniform vec3 u_background_bottom;

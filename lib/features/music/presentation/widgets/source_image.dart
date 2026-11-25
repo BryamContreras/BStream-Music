@@ -434,6 +434,21 @@ class _SourceImageState extends State<SourceImage> {
     if (upgradeCandidates.isEmpty) {
       return visiblePreview;
     }
+    // The high-resolution network rendition has a single upgrade candidate.
+    // Only ordinary, fully opaque image paint can cover its preview. Custom
+    // painters and translucent covers keep the original layered composition.
+    if (upgradeCandidates.length == 1 &&
+        widget.imageBuilder == null &&
+        widget.opacity == 1 &&
+        (fit == BoxFit.cover || fit == BoxFit.fill)) {
+      return _OpaqueThumbnailUpgrade(
+        preview: visiblePreview,
+        provider: CachedArtworkImageProvider(upgradeCandidates.single),
+        decodeWidth: decodeWidth,
+        fit: fit,
+        filterQuality: widget.filterQuality,
+      );
+    }
     final upgrade = _networkArtwork(
       candidates: upgradeCandidates,
       fit: fit,
@@ -461,6 +476,116 @@ class _SourceImageState extends State<SourceImage> {
       ],
     );
   }
+}
+
+/// Keeps the preview until the verified opaque upgrade has finished its fade.
+/// Releasing the hidden child also releases its live image-stream reference.
+class _OpaqueThumbnailUpgrade extends StatefulWidget {
+  const _OpaqueThumbnailUpgrade({
+    required this.preview,
+    required this.provider,
+    required this.decodeWidth,
+    required this.fit,
+    required this.filterQuality,
+  });
+
+  final Widget preview;
+  final CachedArtworkImageProvider provider;
+  final int decodeWidth;
+  final BoxFit fit;
+  final FilterQuality filterQuality;
+
+  @override
+  State<_OpaqueThumbnailUpgrade> createState() =>
+      _OpaqueThumbnailUpgradeState();
+}
+
+class _OpaqueThumbnailUpgradeState extends State<_OpaqueThumbnailUpgrade> {
+  bool _previewHidden = false;
+  bool? _scheduledVisibility;
+  int _generation = 0;
+
+  @override
+  void didUpdateWidget(covariant _OpaqueThumbnailUpgrade oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.provider != widget.provider ||
+        oldWidget.decodeWidth != widget.decodeWidth) {
+      _generation++;
+      _scheduledVisibility = null;
+      _previewHidden = false;
+    }
+  }
+
+  void _setPreviewHiddenAfterFrame(bool hidden, int generation) {
+    if (generation != _generation) return;
+    if (_scheduledVisibility != null) {
+      _scheduledVisibility = hidden;
+      return;
+    }
+    if (_previewHidden == hidden) return;
+    _scheduledVisibility = hidden;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || generation != _generation) return;
+      final next = _scheduledVisibility!;
+      _scheduledVisibility = null;
+      if (_previewHidden != next) {
+        setState(() => _previewHidden = next);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      // Under loose constraints the preview determines the Stack's size.
+      // Keep it mounted so a successful upgrade cannot change the layout.
+      final mayHide = constraints.isTight && constraints.biggest.isFinite;
+      final hidden = mayHide && _previewHidden;
+      final generation = _generation;
+      final provider = widget.provider;
+      return Stack(
+        fit: StackFit.passthrough,
+        children: [
+          if (hidden) const SizedBox.expand() else widget.preview,
+          Positioned.fill(
+            child: Image(
+              image: ResizeImage(provider, width: widget.decodeWidth),
+              fit: widget.fit,
+              filterQuality: widget.filterQuality,
+              gaplessPlayback: true,
+              frameBuilder: (context, child, frame, synchronous) {
+                final loaded = synchronous || frame != null;
+                final opaque = loaded && provider.hasVerifiedOpaqueJpeg;
+                if (!opaque) {
+                  _setPreviewHiddenAfterFrame(false, generation);
+                  if (hidden && !loaded) return widget.preview;
+                } else if (mayHide && synchronous) {
+                  _setPreviewHiddenAfterFrame(true, generation);
+                }
+                return AnimatedOpacity(
+                  opacity: loaded ? 1 : 0,
+                  duration: synchronous
+                      ? Duration.zero
+                      : const Duration(milliseconds: 180),
+                  curve: Curves.easeOutCubic,
+                  onEnd: () {
+                    if (mayHide && opaque && provider.hasVerifiedOpaqueJpeg) {
+                      _setPreviewHiddenAfterFrame(true, generation);
+                    }
+                  },
+                  child: child,
+                );
+              },
+              errorBuilder: (_, _, _) {
+                _setPreviewHiddenAfterFrame(false, generation);
+                return hidden ? widget.preview : const SizedBox.shrink();
+              },
+            ),
+          ),
+        ],
+      );
+    },
+  );
 }
 
 /// Shows artwork without distorting its native proportions.

@@ -107,6 +107,7 @@ class AudioStreamResolution {
     this.sampleRate,
     this.channels,
     this.bitDepth,
+    this.rangedContentLength,
     this.clientProfileKey,
     this.expiresAt,
   });
@@ -147,6 +148,9 @@ class AudioStreamResolution {
   /// Source precision in bits, when verified for a lossless format.
   final int? bitDepth;
 
+  /// Complete byte length, when the origin confirms support for byte ranges.
+  final int? rangedContentLength;
+
   /// Exact InnerTube client profile that produced the signed media URL.
   final String? clientProfileKey;
 
@@ -181,6 +185,7 @@ class AudioStreamResolution {
       sampleRate: sampleRate,
       channels: channels,
       bitDepth: bitDepth,
+      rangedContentLength: rangedContentLength,
       clientProfileKey: clientProfileKey,
       expiresAt: expiresAt,
     );

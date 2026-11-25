@@ -173,6 +173,12 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
   final Set<String> _selectedTrackIds = <String>{};
   late _LibraryRoute _route;
   String _filter = '';
+  List<LocalTrack>? _filteredTrackSource;
+  List<LocalTrack>? _filteredTrackResult;
+  String? _filteredTrackQuery;
+  List<_CatalogDisplayItem>? _filteredCatalogSource;
+  List<_CatalogDisplayItem>? _filteredCatalogResult;
+  String? _filteredCatalogQuery;
   bool _selectionActionInProgress = false;
   bool _playlistSearchVisible = false;
   int _routeDirection = 1;
@@ -185,8 +191,10 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
     _route = widget.navigationController?._route ?? const _LibraryRoute.root();
     widget.navigationController?._attach(this);
     _filterController.addListener(() {
+      final text = _filterController.text;
+      if (text == _filter) return;
       setState(() {
-        _filter = _filterController.text;
+        _filter = text;
         _selectedTrackIds.clear();
       });
     });
@@ -224,10 +232,23 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final tracks = ref.watch(libraryTracksProvider);
-    final playlists = ref.watch(playlistsControllerProvider);
-    final catalogPlaylists = ref.watch(catalogPlaylistsProvider);
-    final subscribedArtists = ref.watch(subscribedArtistsProvider);
+    final isRoot = _route.type == _LibraryRouteType.root;
+    final isDownloads = _route.type == _LibraryRouteType.downloads;
+    final isPlaylist = _route.type == _LibraryRouteType.playlist;
+    // Keep subscriptions specific to the active route. AnimatedSwitcher
+    // retains the outgoing view's already resolved data during its fade.
+    final tracks = isRoot || isDownloads || isPlaylist
+        ? ref.watch(libraryTracksProvider)
+        : const AsyncData(<LocalTrack>[]);
+    final playlists = isRoot || isPlaylist
+        ? ref.watch(playlistsControllerProvider)
+        : const AsyncData(<Playlist>[]);
+    final catalogPlaylists = isRoot
+        ? ref.watch(catalogPlaylistsProvider)
+        : const AsyncData(<CatalogPlaylist>[]);
+    final subscribedArtists = isRoot
+        ? ref.watch(subscribedArtistsProvider)
+        : const AsyncData(<RemoteSubscribedArtist>[]);
     final strings = ref.watch(appStringsProvider);
     final enablesTrackSelection = AppPlatform.isMobileTargetPlatform(
       Theme.of(context).platform,
@@ -285,7 +306,7 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
                 title: strings.downloadedSongs,
                 subtitle: strings.songCountWithDuration(
                   items.length,
-                  sumKnownDurations(items.map((track) => track.duration)),
+                  ref.watch(localTrackIndexProvider).totalDuration,
                 ),
                 tracks: _filteredTracks(items),
                 queueTracks: items,
@@ -360,21 +381,17 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
                             // presenting an empty playlist.
                             if (allItems.isEmpty &&
                                 playlist.trackIds.isNotEmpty) {
-                              final byId = <String, LocalTrack>{
-                                for (final track in libraryTracks)
-                                  track.id: track,
-                              };
-                              final playlistTracks = playlist.trackIds
-                                  .map((id) => byId[id])
-                                  .whereType<LocalTrack>()
-                                  .toList(growable: false);
+                              final legacy = ref.watch(
+                                _legacyPlaylistTracksProvider(playlist),
+                              );
+                              final playlistTracks = legacy.tracks;
                               return _TrackListView(
                                 artworkSources: playlistArtworkSourcesFor(
                                   ref,
                                   playlist,
                                   () => _playlistThumbnailSources(
                                     playlist,
-                                    byId,
+                                    playlistTracks,
                                     rotationSeed: _artworkRotationSeed,
                                   ),
                                 ),
@@ -385,11 +402,7 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
                                     : playlist.name,
                                 subtitle: strings.songCountWithDuration(
                                   playlistTracks.length,
-                                  sumKnownDurations(
-                                    playlistTracks.map(
-                                      (track) => track.duration,
-                                    ),
-                                  ),
+                                  legacy.duration,
                                 ),
                                 tracks: _filteredTracks(playlistTracks),
                                 queueTracks: playlistTracks,
@@ -444,9 +457,7 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
                                   : playlist.name,
                               subtitle: strings.songCountWithDuration(
                                 allItems.length,
-                                sumKnownDurations(
-                                  allItems.map((item) => item.duration),
-                                ),
+                                ref.watch(_catalogDurationProvider(allItems)),
                               ),
                               items: _filteredCatalogItems(allItems),
                               queueItems: allItems,
@@ -943,9 +954,18 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
   List<LocalTrack> _filteredTracks(List<LocalTrack> tracks) {
     final query = _filter.trim().toLowerCase();
     if (query.isEmpty) {
+      _filteredTrackSource = null;
+      _filteredTrackResult = null;
+      _filteredTrackQuery = null;
       return tracks;
     }
-    return tracks
+    if (identical(_filteredTrackSource, tracks) &&
+        _filteredTrackQuery == query) {
+      return _filteredTrackResult!;
+    }
+    _filteredTrackSource = tracks;
+    _filteredTrackQuery = query;
+    return _filteredTrackResult = tracks
         .where((track) {
           return track.title.toLowerCase().contains(query) ||
               track.artist.toLowerCase().contains(query);
@@ -1100,9 +1120,18 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
   ) {
     final query = _filter.trim().toLowerCase();
     if (query.isEmpty) {
+      _filteredCatalogSource = null;
+      _filteredCatalogResult = null;
+      _filteredCatalogQuery = null;
       return items;
     }
-    return items
+    if (identical(_filteredCatalogSource, items) &&
+        _filteredCatalogQuery == query) {
+      return _filteredCatalogResult!;
+    }
+    _filteredCatalogSource = items;
+    _filteredCatalogQuery = query;
+    return _filteredCatalogResult = items
         .where(
           (item) =>
               item.title.toLowerCase().contains(query) ||
@@ -1152,7 +1181,7 @@ class _LibraryPanelState extends ConsumerState<LibraryPanel> {
   }
 }
 
-class _LibraryRootView extends StatelessWidget {
+class _LibraryRootView extends ConsumerWidget {
   const _LibraryRootView({
     required this.artworkRotationSeed,
     required this.bottomContentPadding,
@@ -1184,12 +1213,13 @@ class _LibraryRootView extends StatelessWidget {
   final ValueChanged<RemoteSubscribedArtist> onOpenArtist;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final localTracks = tracks.value ?? const <LocalTrack>[];
-    final catalogsById = <String, CatalogPlaylist>{
-      for (final catalog in catalogPlaylists.value ?? const <CatalogPlaylist>[])
-        catalog.playlist.id: catalog,
-    };
+    final catalogsById = ref.watch(
+      _catalogPlaylistsByIdProvider(
+        catalogPlaylists.value ?? const <CatalogPlaylist>[],
+      ),
+    );
     final followedArtists =
         subscribedArtists.value ?? const <RemoteSubscribedArtist>[];
 
@@ -1217,7 +1247,7 @@ class _LibraryRootView extends StatelessWidget {
                   title: strings.downloadedSongs,
                   subtitle: strings.songCountWithDuration(
                     items.length,
-                    sumKnownDurations(items.map((track) => track.duration)),
+                    ref.watch(localTrackIndexProvider).totalDuration,
                   ),
                   onTap: onOpenDownloads,
                 ),
@@ -1808,6 +1838,35 @@ final _catalogDisplayItemsProvider = Provider.autoDispose
       );
     });
 
+final _catalogPlaylistsByIdProvider = Provider.autoDispose
+    .family<Map<String, CatalogPlaylist>, List<CatalogPlaylist>>((
+      ref,
+      catalogs,
+    ) {
+      return {for (final catalog in catalogs) catalog.playlist.id: catalog};
+    });
+
+final _catalogDurationProvider = Provider.autoDispose
+    .family<Duration?, List<_CatalogDisplayItem>>((ref, items) {
+      return sumKnownDurations(items.map((item) => item.duration));
+    });
+
+final _legacyPlaylistTracksProvider = Provider.autoDispose
+    .family<({List<LocalTrack> tracks, Duration? duration}), Playlist>((
+      ref,
+      playlist,
+    ) {
+      final index = ref.watch(localTrackIndexProvider);
+      final tracks = playlist.trackIds
+          .map(index.lastByExactId)
+          .whereType<LocalTrack>()
+          .toList(growable: false);
+      return (
+        tracks: tracks,
+        duration: sumKnownDurations(tracks.map((track) => track.duration)),
+      );
+    });
+
 List<PlaylistArtworkSource> _catalogPlaylistThumbnailSources(
   String playlistId,
   List<_CatalogDisplayItem> items, {
@@ -2106,6 +2165,23 @@ class _CatalogTrackListView extends ConsumerWidget {
   }
 }
 
+final _catalogRowPlaybackProvider = Provider.autoDispose
+    .family<({bool current, bool playing}), _CatalogDisplayItem>((ref, item) {
+      final logicalEntryId = ref.watch(currentQueueLogicalEntryIdProvider);
+      return ref.watch(
+        playerControllerProvider.select((player) {
+          final snapshot = player.value;
+          final current = logicalEntryId != null
+              ? logicalEntryId == item.entry.id
+              : item.matchesTrackId(snapshot?.trackId);
+          return (
+            current: current,
+            playing: current && snapshot?.status == PlayerStatus.playing,
+          );
+        }),
+      );
+    });
+
 class _CatalogTrackTile extends ConsumerStatefulWidget {
   const _CatalogTrackTile({
     required this.item,
@@ -2141,17 +2217,9 @@ class _CatalogTrackTileState extends ConsumerState<_CatalogTrackTile> {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final strings = ref.watch(appStringsProvider);
-    final playback = ref.watch(
-      playerControllerProvider.select((player) {
-        final snapshot = player.value;
-        return (trackId: snapshot?.trackId, status: snapshot?.status);
-      }),
-    );
-    final currentLogicalEntryId = ref.watch(currentQueueLogicalEntryIdProvider);
-    final isCurrent = currentLogicalEntryId != null
-        ? currentLogicalEntryId == widget.item.entry.id
-        : widget.item.matchesTrackId(playback.trackId);
-    final isPlaying = isCurrent && playback.status == PlayerStatus.playing;
+    final playback = ref.watch(_catalogRowPlaybackProvider(widget.item));
+    final isCurrent = playback.current;
+    final isPlaying = playback.playing;
     final localTrack = widget.item.localTrack;
     final remoteTrack = widget.item.playback?.remoteTrack;
     final remoteUrl = remoteTrack?.url;
@@ -3865,8 +3933,6 @@ class _PlaylistList extends StatelessWidget {
       );
     }
 
-    final tracksById = {for (final track in libraryTracks) track.id: track};
-
     return SliverList.builder(
       itemCount: playlists.length,
       itemBuilder: (context, index) {
@@ -3877,7 +3943,6 @@ class _PlaylistList extends StatelessWidget {
             playlist: playlist,
             catalog: catalogPlaylists[playlist.id],
             libraryTracks: libraryTracks,
-            tracksById: tracksById,
             artworkRotationSeed: artworkRotationSeed,
             strings: strings,
             onTap: () => onOpenPlaylist(playlist.id),
@@ -3893,7 +3958,6 @@ class _PlaylistSummaryRow extends ConsumerWidget {
     required this.playlist,
     required this.catalog,
     required this.libraryTracks,
-    required this.tracksById,
     required this.artworkRotationSeed,
     required this.strings,
     required this.onTap,
@@ -3902,7 +3966,6 @@ class _PlaylistSummaryRow extends ConsumerWidget {
   final Playlist playlist;
   final CatalogPlaylist? catalog;
   final List<LocalTrack> libraryTracks;
-  final Map<String, LocalTrack> tracksById;
   final int artworkRotationSeed;
   final AppStrings strings;
   final VoidCallback onTap;
@@ -3919,18 +3982,16 @@ class _PlaylistSummaryRow extends ConsumerWidget {
             )),
           );
     final needsLegacyTracks = currentCatalog == null || catalogItems.isEmpty;
-    final playlistTracks = needsLegacyTracks
-        ? playlist.trackIds
-              .map((id) => tracksById[id])
-              .whereType<LocalTrack>()
-              .toList(growable: false)
-        : const <LocalTrack>[];
+    final legacy = needsLegacyTracks
+        ? ref.watch(_legacyPlaylistTracksProvider(playlist))
+        : null;
+    final playlistTracks = legacy?.tracks ?? const <LocalTrack>[];
     final itemCount = currentCatalog == null
         ? playlistTracks.length
         : catalogItems.length;
     final duration = currentCatalog == null
-        ? sumKnownDurations(playlistTracks.map((track) => track.duration))
-        : sumKnownDurations(catalogItems.map((item) => item.duration));
+        ? legacy?.duration
+        : ref.watch(_catalogDurationProvider(catalogItems));
     final thumbnailSources = playlistArtworkSourcesFor(
       ref,
       playlist,
@@ -3939,7 +4000,7 @@ class _PlaylistSummaryRow extends ConsumerWidget {
               currentCatalog == null
           ? _playlistThumbnailSources(
               playlist,
-              tracksById,
+              playlistTracks,
               rotationSeed: artworkRotationSeed,
             )
           : _catalogPlaylistThumbnailSources(
@@ -4014,13 +4075,10 @@ class _PlaylistRow extends StatelessWidget {
 
 List<PlaylistArtworkSource> _playlistThumbnailSources(
   Playlist playlist,
-  Map<String, LocalTrack> tracksById, {
+  List<LocalTrack> playlistTracks, {
   int? rotationSeed,
 }) {
-  final sources = playlist.trackIds
-      .map((id) => tracksById[id])
-      .whereType<LocalTrack>()
-      .map(preferredLocalPlaylistArtworkSource);
+  final sources = playlistTracks.map(preferredLocalPlaylistArtworkSource);
   return rotatingPlaylistArtworkSources(
     playlistId: playlist.id,
     candidates: sources,
@@ -4176,13 +4234,22 @@ class _PlaylistArtworkHeader extends ConsumerWidget {
                   artworkSource: sources.firstOrNull?.source,
                   cacheWidth: decodeWidth,
                   keyPrefix: 'library-playlist',
-                  backgroundArtwork: FittedBox(
+                  backgroundArtworkRevision: (
+                    artworkSize,
+                    sources.elementAtOrNull(0),
+                    sources.elementAtOrNull(1),
+                    sources.elementAtOrNull(2),
+                    sources.elementAtOrNull(3),
+                  ),
+                  backgroundArtworkFrameCount: sources.length > 1 ? 4 : 1,
+                  backgroundArtworkBuilder: (onFrame) => FittedBox(
                     fit: BoxFit.cover,
                     child: PlaylistArtworkMosaic(
                       sources: sources,
                       size: artworkSize,
                       borderRadius: 0,
                       cacheWidth: decodeWidth,
+                      onFrame: onFrame,
                     ),
                   ),
                 ),
@@ -4368,15 +4435,19 @@ class _LocalTrackTileState extends ConsumerState<_LocalTrackTile> {
     final playback = ref.watch(
       playerControllerProvider.select((player) {
         final snapshot = player.value;
-        return (trackId: snapshot?.trackId, status: snapshot?.status);
+        final current =
+            snapshot?.trackId == track.id &&
+            (snapshot?.status == PlayerStatus.loading ||
+                snapshot?.status == PlayerStatus.playing ||
+                snapshot?.status == PlayerStatus.paused);
+        return (
+          current: current,
+          playing: current && snapshot?.status == PlayerStatus.playing,
+        );
       }),
     );
-    final isCurrent =
-        playback.trackId == track.id &&
-        (playback.status == PlayerStatus.loading ||
-            playback.status == PlayerStatus.playing ||
-            playback.status == PlayerStatus.paused);
-    final isPlaying = isCurrent && playback.status == PlayerStatus.playing;
+    final isCurrent = playback.current;
+    final isPlaying = playback.playing;
     final colors = Theme.of(context).colorScheme;
     final artwork = preferredLocalTrackArtworkSource(track);
     final menuButtonSize = AppPlatform.isMobile ? 48.0 : 52.0;

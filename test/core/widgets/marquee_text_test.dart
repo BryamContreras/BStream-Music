@@ -7,8 +7,12 @@ void main() {
   testWidgets('stops text clipped by a nested horizontal viewport', (
     tester,
   ) async {
+    final vertical = ScrollController();
+    final horizontal = ScrollController();
+    addTearDown(vertical.dispose);
+    addTearDown(horizontal.dispose);
     await tester.pumpWidget(
-      const MaterialApp(
+      MaterialApp(
         home: Align(
           alignment: Alignment.topLeft,
           child: SizedBox(
@@ -16,19 +20,32 @@ void main() {
             height: 80,
             child: ScrollNotificationObserver(
               child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
+                controller: vertical,
+                child: Column(
                   children: [
-                    SizedBox(width: 250),
+                    const SizedBox(height: 140),
                     SizedBox(
-                      width: 80,
-                      child: MarqueeText(
-                        'A very long hidden title',
-                        pause: Duration(milliseconds: 200),
-                        travel: Duration(seconds: 1),
+                      height: 80,
+                      child: SingleChildScrollView(
+                        controller: horizontal,
+                        scrollDirection: Axis.horizontal,
+                        child: const Row(
+                          children: [
+                            SizedBox(width: 250),
+                            SizedBox(
+                              width: 80,
+                              child: MarqueeText(
+                                'A very long hidden title',
+                                pause: Duration(milliseconds: 200),
+                                travel: Duration(seconds: 1),
+                              ),
+                            ),
+                            SizedBox(width: 400),
+                          ],
+                        ),
                       ),
                     ),
-                    SizedBox(width: 400),
+                    const SizedBox(height: 100),
                   ],
                 ),
               ),
@@ -41,14 +58,84 @@ void main() {
     await tester.pump(const Duration(seconds: 2));
     expect(_marqueeAnimating(tester), isFalse);
     expect(_marqueeTranslation(tester), 0);
-    await tester.drag(
-      find.byType(SingleChildScrollView),
-      const Offset(-250, 0),
-    );
+
+    horizontal.jumpTo(250);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(_marqueeAnimating(tester), isFalse);
+    expect(_marqueeTranslation(tester), 0);
+
+    vertical.jumpTo(140);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 420));
     await tester.pump(const Duration(milliseconds: 250));
     expect(_marqueeTranslation(tester), lessThan(0));
+
+    horizontal.jumpTo(0);
+    await tester.pump();
+    await tester.pump();
+    expect(_marqueeAnimating(tester), isFalse);
+    expect(_marqueeTranslation(tester), 0);
+  });
+
+  testWidgets('ignores a sibling scroll when checking title visibility', (
+    tester,
+  ) async {
+    final titleScroll = ScrollController();
+    final siblingScroll = ScrollController();
+    addTearDown(titleScroll.dispose);
+    addTearDown(siblingScroll.dispose);
+    var geometryChecks = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ScrollNotificationObserver(
+          child: Row(
+            children: [
+              SizedBox(
+                width: 120,
+                height: 100,
+                child: SingleChildScrollView(
+                  controller: titleScroll,
+                  child: Column(
+                    children: [
+                      _VisibilityProbe(
+                        onCheck: () => geometryChecks++,
+                        child: const SizedBox(
+                          width: 100,
+                          child: MarqueeText(
+                            'A long title with visibility checks',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 200),
+                    ],
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: 120,
+                height: 100,
+                child: SingleChildScrollView(
+                  controller: siblingScroll,
+                  child: const SizedBox(height: 300),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(geometryChecks, greaterThan(0));
+    final checksBeforeScrolling = geometryChecks;
+
+    siblingScroll.jumpTo(25);
+    await tester.pump();
+    expect(geometryChecks, checksBeforeScrolling);
+
+    titleScroll.jumpTo(4);
+    await tester.pump();
+    expect(geometryChecks, greaterThan(checksBeforeScrolling));
   });
   testWidgets('keeps short labels static and scrolls overflowing labels', (
     tester,
@@ -558,6 +645,28 @@ class _CountingPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_CountingPainter oldDelegate) => false;
+}
+
+class _VisibilityProbe extends SingleChildRenderObjectWidget {
+  const _VisibilityProbe({required this.onCheck, required super.child});
+
+  final VoidCallback onCheck;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderVisibilityProbe(onCheck);
+}
+
+class _RenderVisibilityProbe extends RenderProxyBox {
+  _RenderVisibilityProbe(this.onCheck);
+
+  final VoidCallback onCheck;
+
+  @override
+  Rect? describeApproximatePaintClip(RenderObject child) {
+    onCheck();
+    return super.describeApproximatePaintClip(child);
+  }
 }
 
 class _CountingLayout extends SingleChildRenderObjectWidget {

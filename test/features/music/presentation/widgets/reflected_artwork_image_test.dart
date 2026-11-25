@@ -370,6 +370,61 @@ void main() {
       }
     },
   );
+
+  testWidgets('reuses the same raster when reopening an artwork reflection', (
+    tester,
+  ) async {
+    final source = (await tester.runAsync(_createBandedImage))!;
+    final nextHandle = source.clone();
+    const artworkRect = Rect.fromLTWH(-12, -18, 180, 180);
+    const viewport = Size(160, 260);
+    const rasterKey = ValueKey('progressive-reflected-artwork-raster');
+    ui.Image raster() => tester.widget<RawImage>(find.byKey(rasterKey)).image!;
+
+    try {
+      final first = await _capture(
+        tester,
+        source,
+        artworkRect,
+        viewport,
+        progressive: true,
+      );
+      final firstRaster = raster();
+      await tester.pumpWidget(const SizedBox.shrink());
+      expect(firstRaster.debugDisposed, isTrue);
+
+      final reopened = await _capture(
+        tester,
+        nextHandle,
+        artworkRect,
+        viewport,
+        progressive: true,
+      );
+      final reopenedRaster = raster();
+      expect(reopenedRaster.isCloneOf(firstRaster), isTrue);
+      expect(reopened.bytes, equals(first.bytes));
+
+      tester.binding.handleMemoryPressure();
+      expect(reopenedRaster.debugDisposed, isFalse);
+      await tester.pumpWidget(const SizedBox.shrink());
+      expect(reopenedRaster.debugDisposed, isTrue);
+
+      final afterPressure = await _capture(
+        tester,
+        source,
+        artworkRect,
+        viewport,
+        progressive: true,
+      );
+      expect(raster().isCloneOf(reopenedRaster), isFalse);
+      expect(afterPressure.bytes, equals(first.bytes));
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      tester.binding.handleMemoryPressure();
+      nextHandle.dispose();
+      source.dispose();
+    }
+  });
 }
 
 Future<ui.Image> _createStripedImage() async {

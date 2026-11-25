@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/entities/playlist.dart';
 import '../providers/playlist_artwork_providers.dart';
+import 'artwork_header_snapshot.dart';
 import 'playlist_artwork.dart';
 import 'source_image.dart';
 
@@ -32,6 +33,7 @@ class PlaylistArtworkMosaic extends StatelessWidget {
     required this.size,
     this.borderRadius = 8,
     this.cacheWidth,
+    this.onFrame,
     super.key,
   }) : assert(size > 0),
        assert(borderRadius >= 0),
@@ -43,6 +45,7 @@ class PlaylistArtworkMosaic extends StatelessWidget {
 
   /// The physical decode width for each individual cover, when specified.
   final int? cacheWidth;
+  final ArtworkSnapshotFrame? onFrame;
 
   @override
   Widget build(BuildContext context) {
@@ -63,7 +66,20 @@ class PlaylistArtworkMosaic extends StatelessWidget {
         source: artwork.source,
         fallbackSource: artwork.fallbackSource,
         cacheWidth: decodeWidth,
-        fallback: const _PlaylistArtworkFallback(),
+        fallback: onFrame == null
+            ? const _PlaylistArtworkFallback()
+            : Builder(
+                builder: (context) {
+                  onFrame!(null, index: index);
+                  return const _PlaylistArtworkFallback();
+                },
+              ),
+        imageBuilder: onFrame == null
+            ? null
+            : (context, image) {
+                onFrame!(image.image, index: index);
+                return image;
+              },
       );
     }
 

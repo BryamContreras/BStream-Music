@@ -162,7 +162,7 @@ class HttpAudioTransfer {
   /// Wall-clock cap for HTTP work, retries, retry delays, and promotion.
   final Duration totalTimeout;
 
-  /// Number of retries after the initial network attempt.
+  /// Number of retries without completing a new bounded range.
   final int maxRetries;
   final Duration retryDelay;
   final Duration cancellationPollInterval;
@@ -278,6 +278,7 @@ class _HttpAudioTransferRun {
   StackTrace? _cancellationCallbackStack;
   _EntityValidator? _entityValidator;
   bool _resumed = false;
+  int _confirmedRangeBytes = 0;
 
   Future<HttpAudioTransferResult> run() async {
     try {
@@ -286,11 +287,11 @@ class _HttpAudioTransferRun {
       _throwIfTerminal();
       await destination.parent.create(recursive: true);
 
-      _RetryableTransferFailure? lastFailure;
-      StackTrace? lastStack;
       final maximumAttempts = owner.maxRetries + 1;
+      var attemptsSinceProgress = 0;
+      var lastConfirmedRangeBytes = 0;
 
-      for (var attempt = 1; attempt <= maximumAttempts; attempt++) {
+      for (var attempt = 1; ; attempt++) {
         _throwIfTerminal();
         try {
           final completedLength = await _attempt(attempt);
@@ -327,24 +328,28 @@ class _HttpAudioTransferRun {
           if (failure == null) {
             Error.throwWithStackTrace(error, stackTrace);
           }
-          lastFailure = failure;
-          lastStack = stackTrace;
-
-          if (attempt >= maximumAttempts) {
-            break;
+          // A long transfer can hit several independent interruptions. Give
+          // the next range fresh retries once more of the file was validated.
+          // The total timeout still bounds the entire transfer.
+          if (_confirmedRangeBytes > lastConfirmedRangeBytes) {
+            lastConfirmedRangeBytes = _confirmedRangeBytes;
+            attemptsSinceProgress = 0;
           }
-          await _waitBeforeRetry(attempt);
+          attemptsSinceProgress++;
+          if (attemptsSinceProgress >= maximumAttempts) {
+            Error.throwWithStackTrace(
+              HttpAudioTransferException(
+                '${failure.message} Retry limit reached.',
+                kind: failure.kind,
+                statusCode: failure.statusCode,
+                cause: failure.cause ?? failure,
+              ),
+              stackTrace,
+            );
+          }
+          await _waitBeforeRetry(attemptsSinceProgress);
         }
       }
-
-      final failure = lastFailure!;
-      final error = HttpAudioTransferException(
-        '${failure.message} Retry limit reached.',
-        kind: failure.kind,
-        statusCode: failure.statusCode,
-        cause: failure.cause ?? failure,
-      );
-      Error.throwWithStackTrace(error, lastStack ?? StackTrace.current);
     } finally {
       _stopWatchdogs();
       _activeRequest = null;
@@ -400,6 +405,9 @@ class _HttpAudioTransferRun {
             'The ranged audio transfer did not make progress.',
             kind: HttpAudioTransferFailureKind.invalidRange,
           );
+        }
+        if (completedLength > _confirmedRangeBytes) {
+          _confirmedRangeBytes = completedLength;
         }
         requestedOffset = completedLength;
         resumingExistingPartial = false;

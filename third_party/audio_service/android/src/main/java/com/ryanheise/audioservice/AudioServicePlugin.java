@@ -34,7 +34,10 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 import io.flutter.embedding.android.FlutterActivity;
 import io.flutter.embedding.android.FlutterFragmentActivity;
@@ -516,23 +519,140 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
 
     private static class AudioHandlerInterface implements MethodCallHandler, AudioService.ServiceListener {
         private static final int SILENCE_SAMPLE_RATE = 44100;
+        private static final int MAX_PENDING_METADATA = 64;
         public BinaryMessenger messenger;
         public MethodChannel channel;
         private AudioTrack silenceAudioTrack;
         private final Handler handler = new Handler(Looper.getMainLooper());
         private List<MethodInvocation> methodInvocationQueue = new LinkedList<MethodInvocation>();
+        // One ordered worker for the lifetime of the handler. Decode artwork
+        // off the platform/UI thread without creating a persistent executor
+        // for every queue or track update.
+        private final ThreadPoolExecutor metadataExecutor = new ThreadPoolExecutor(
+                1, 1, 30, TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(MAX_PENDING_METADATA));
+        private volatile long metadataGeneration;
+        private volatile long mediaItemSequence;
+        private volatile boolean destroyed;
+        private List<Map<?, ?>> lastRawControls;
+        private List<MediaControl> parsedControls;
+        private long controlActionBits;
 
         public AudioHandlerInterface(BinaryMessenger messenger) {
             this.messenger = messenger;
+            metadataExecutor.allowCoreThreadTimeOut(true);
             channel = new MethodChannel(messenger, CHANNEL_HANDLER);
             channel.setMethodCallHandler(this);
         }
 
         public void switchToMessenger(BinaryMessenger messenger) {
+            invalidateMetadataJobs();
             channel.setMethodCallHandler(null);
             this.messenger = messenger;
             channel = new MethodChannel(messenger, CHANNEL_HANDLER);
             channel.setMethodCallHandler(this);
+        }
+
+        private interface MetadataWork {
+            void run(AudioService service, AudioService.MetadataRequest request);
+        }
+
+        private final class MetadataJob implements Runnable, AudioService.MetadataRequest {
+            private final AudioService service;
+            private final long generation = metadataGeneration;
+            // Queue updates are never superseded by a media item update.
+            private final long itemSequence;
+            private final MetadataWork work;
+            private final Result result;
+
+            MetadataJob(AudioService service, long itemSequence, MetadataWork work, Result result) {
+                this.service = service;
+                this.itemSequence = itemSequence;
+                this.work = work;
+                this.result = result;
+            }
+
+            @Override
+            public boolean isCurrent() {
+                return isLifecycleCurrent() && !isSuperseded();
+            }
+
+            private boolean isLifecycleCurrent() {
+                return !destroyed && generation == metadataGeneration && service.isActive();
+            }
+
+            private boolean isSuperseded() {
+                return itemSequence != 0 && itemSequence != mediaItemSequence;
+            }
+
+            @Override
+            public void run() {
+                try {
+                    if (!isCurrent()) {
+                        complete();
+                        return;
+                    }
+                    work.run(service, this);
+                    complete();
+                } catch (Exception e) {
+                    if (isSuperseded()) {
+                        complete();
+                    } else {
+                        handler.post(() -> result.error(
+                                "UNEXPECTED_ERROR", "Unexpected error", Log.getStackTraceString(e)));
+                    }
+                }
+            }
+
+            void complete() {
+                handler.post(() -> {
+                    if (isLifecycleCurrent()) {
+                        // A newer item replaces this metadata. Acknowledge the
+                        // obsolete request rather than report a playback error.
+                        result.success(null);
+                    } else {
+                        result.error("METADATA_CANCELLED", "Audio service changed", null);
+                    }
+                });
+            }
+
+            void cancel() {
+                handler.post(() -> result.error("METADATA_CANCELLED", "Audio service changed", null));
+            }
+        }
+
+        private void invalidateMetadataJobs() {
+            metadataGeneration++;
+            final List<Runnable> pending = new ArrayList<>();
+            metadataExecutor.getQueue().drainTo(pending);
+            for (Runnable job : pending) {
+                ((MetadataJob) job).cancel();
+            }
+        }
+
+        private void submitMetadata(boolean isMediaItem, MetadataWork work, Result result) {
+            final AudioService service = AudioService.instance;
+            if (destroyed || service == null || !service.isActive()) {
+                result.error("METADATA_CANCELLED", "Audio service is not active", null);
+                return;
+            }
+            long itemSequence = 0;
+            if (isMediaItem) {
+                itemSequence = ++mediaItemSequence;
+                // Remove queued, superseded media items before they decode
+                // artwork. Do not discard or reorder intervening queue updates.
+                for (Runnable pending : metadataExecutor.getQueue()) {
+                    MetadataJob job = (MetadataJob)pending;
+                    if (job.isSuperseded() && metadataExecutor.remove(job)) {
+                        job.complete();
+                    }
+                }
+            }
+            try {
+                metadataExecutor.execute(new MetadataJob(service, itemSequence, work, result));
+            } catch (RejectedExecutionException e) {
+                result.error("METADATA_BUSY", "Audio metadata queue is full or closed", null);
+            }
         }
 
         public void invokePendingMethods() {
@@ -835,33 +955,19 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
                 Map<?, ?> args = (Map<?, ?>)call.arguments;
                 switch (call.method) {
                 case "setMediaItem": {
-                    Executors.newSingleThreadExecutor().execute(() -> {
-                        try {
-                            Map<?, ?> rawMediaItem = (Map<?, ?>)args.get("mediaItem");
-                            MediaMetadataCompat mediaMetadata = createMediaMetadata(rawMediaItem);
-                            AudioService.instance.setMetadata(mediaMetadata);
-                            handler.post(() -> result.success(null));
-                        } catch (Exception e) {
-                            handler.post(() -> {
-                                result.error("UNEXPECTED_ERROR", "Unexpected error", Log.getStackTraceString(e));
-                            });
-                        }
-                    });
+                    Map<?, ?> rawMediaItem = (Map<?, ?>)args.get("mediaItem");
+                    submitMetadata(true, (service, request) -> {
+                        MediaMetadataCompat metadata = createMediaMetadata(service, rawMediaItem);
+                        service.setMetadata(metadata, request);
+                    }, result);
                     break;
                 }
                 case "setQueue": {
-                    Executors.newSingleThreadExecutor().execute(() -> {
-                        try {
-                            @SuppressWarnings("unchecked") List<Map<?, ?>> rawQueue = (List<Map<?, ?>>) args.get("queue");
-                            List<MediaSessionCompat.QueueItem> queue = raw2queue(rawQueue);
-                            AudioService.instance.setQueue(queue);
-                            handler.post(() -> result.success(null));
-                        } catch (Exception e) {
-                            handler.post(() -> {
-                                result.error("UNEXPECTED_ERROR", "Unexpected error", Log.getStackTraceString(e));
-                            });
-                        }
-                    });
+                    @SuppressWarnings("unchecked") List<Map<?, ?>> rawQueue = (List<Map<?, ?>>) args.get("queue");
+                    submitMetadata(false, (service, request) -> {
+                        List<MediaSessionCompat.QueueItem> queue = raw2queue(service, rawQueue);
+                        service.setQueue(queue, request);
+                    }, result);
                     break;
                 }
                 case "setState": {
@@ -886,22 +992,28 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
                     // On the native side, we must represent the update time relative to the boot time.
                     long updateTimeSinceBoot = updateTimeSinceEpoch - bootTime;
 
-                    List<MediaControl> actions = new ArrayList<>();
-                    long actionBits = 0;
-                    for (Map<?, ?> rawControl : rawControls) {
-                        String resource = (String)rawControl.get("androidIcon");
-                        String label = (String)rawControl.get("label");
-                        long actionCode = 1 << ((Integer)rawControl.get("action"));
-                        actionBits |= actionCode;
-                        Map<?, ?> customActionMap = (Map<?, ?>)rawControl.get("customAction");
-                        CustomMediaAction customAction = null;
-                        if (customActionMap != null) {
-                            String name = (String) customActionMap.get("name");
-                            Map<?, ?> extras = (Map<?, ?>) customActionMap.get("extras");
-                            customAction = new CustomMediaAction(name, extras);
+                    if (!rawControls.equals(lastRawControls)) {
+                        List<MediaControl> actions = new ArrayList<>(rawControls.size());
+                        long newControlBits = 0;
+                        for (Map<?, ?> rawControl : rawControls) {
+                            String resource = (String)rawControl.get("androidIcon");
+                            String label = (String)rawControl.get("label");
+                            long actionCode = 1 << ((Integer)rawControl.get("action"));
+                            newControlBits |= actionCode;
+                            Map<?, ?> customActionMap = (Map<?, ?>)rawControl.get("customAction");
+                            CustomMediaAction customAction = null;
+                            if (customActionMap != null) {
+                                String name = (String)customActionMap.get("name");
+                                Map<?, ?> extras = (Map<?, ?>)customActionMap.get("extras");
+                                customAction = new CustomMediaAction(name, extras);
+                            }
+                            actions.add(new MediaControl(resource, label, actionCode, customAction));
                         }
-                        actions.add(new MediaControl(resource, label, actionCode, customAction));
+                        lastRawControls = rawControls;
+                        parsedControls = actions;
+                        controlActionBits = newControlBits;
                     }
+                    long actionBits = controlActionBits;
                     for (Integer rawSystemAction : rawSystemActions) {
                         long actionCode = 1 << rawSystemAction;
                         actionBits |= actionCode;
@@ -913,7 +1025,7 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
                             compactActionIndices[i] = (Integer)compactActionIndexList.get(i);
                     }
                     AudioService.instance.setState(
-                            actions,
+                            parsedControls,
                             actionBits,
                             compactActionIndices,
                             processingState,
@@ -1016,6 +1128,12 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
         }
 
         private void destroy() {
+            destroyed = true;
+            invalidateMetadataJobs();
+            for (Runnable job : metadataExecutor.shutdownNow()) {
+                ((MetadataJob)job).cancel();
+            }
+            channel.setMethodCallHandler(null);
             if (silenceAudioTrack != null)
                 silenceAudioTrack.release();
         }
@@ -1129,8 +1247,12 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
     }
 
     private static MediaMetadataCompat createMediaMetadata(Map<?, ?> rawMediaItem) {
+        return createMediaMetadata(AudioService.instance, rawMediaItem);
+    }
+
+    private static MediaMetadataCompat createMediaMetadata(AudioService service, Map<?, ?> rawMediaItem) {
        //noinspection unchecked
-       return AudioService.instance.createMediaMetadata(
+       return service.createMediaMetadata(
                 (String)rawMediaItem.get("id"),
                 (String)rawMediaItem.get("title"),
                 (String)rawMediaItem.get("album"),
@@ -1183,11 +1305,11 @@ public class AudioServicePlugin implements FlutterPlugin, ActivityAware {
         return new MediaBrowserCompat.MediaItem(description, playable ? MediaBrowserCompat.MediaItem.FLAG_PLAYABLE : MediaBrowserCompat.MediaItem.FLAG_BROWSABLE);
     }
 
-    private static List<MediaSessionCompat.QueueItem> raw2queue(List<Map<?, ?>> rawQueue) {
+    private static List<MediaSessionCompat.QueueItem> raw2queue(AudioService service, List<Map<?, ?>> rawQueue) {
         List<MediaSessionCompat.QueueItem> queue = new ArrayList<>();
         int i = 0;
         for (Map<?, ?> rawMediaItem : rawQueue) {
-            MediaMetadataCompat mediaMetadata = createMediaMetadata(rawMediaItem);
+            MediaMetadataCompat mediaMetadata = createMediaMetadata(service, rawMediaItem);
             MediaDescriptionCompat description = addExtrasToMediaDescription(mediaMetadata.getDescription(), (Map<?, ?>)rawMediaItem.get("extras"));
             queue.add(new MediaSessionCompat.QueueItem(description, i));
             i++;

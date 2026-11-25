@@ -2107,32 +2107,23 @@ void main() {
         Colors.transparent,
       );
 
+      double rowX(String id) => tester
+          .getTopLeft(find.byKey(ValueKey('track-result-surface-$id')))
+          .dx;
+      final restingSongX = rowX('song-0');
+      expect(find.byKey(const ValueKey('search-result-song-11')), findsNothing);
+
       await controller.selectCategory(SearchCategory.videos);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 70));
 
-      final forwardSongTransition = tester.widget<SlideTransition>(
-        find
-            .ancestor(
-              of: find.byKey(const ValueKey('search-category-results-songs')),
-              matching: find.byType(SlideTransition),
-            )
-            .first,
-      );
-      final forwardVideoTransition = tester.widget<SlideTransition>(
-        find
-            .ancestor(
-              of: find.byKey(const ValueKey('search-category-results-videos')),
-              matching: find.byType(SlideTransition),
-            )
-            .first,
-      );
-      expect(forwardSongTransition.position.value.dx, lessThan(0));
-      expect(forwardVideoTransition.position.value.dx, greaterThan(0));
+      expect(rowX('song-0'), lessThan(restingSongX));
+      expect(rowX('video-0'), greaterThan(restingSongX));
 
       expect(find.text('Canción 0'), findsOneWidget);
       expect(find.text('Video 0'), findsOneWidget);
       expect(scrollable.position.pixels, closeTo(offsetBeforeSelection, 0.01));
+      final restingVideoX = rowX('video-0');
 
       await tester.pumpAndSettle();
 
@@ -2144,24 +2135,8 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 70));
 
-      final backwardVideoTransition = tester.widget<SlideTransition>(
-        find
-            .ancestor(
-              of: find.byKey(const ValueKey('search-category-results-videos')),
-              matching: find.byType(SlideTransition),
-            )
-            .first,
-      );
-      final backwardSongTransition = tester.widget<SlideTransition>(
-        find
-            .ancestor(
-              of: find.byKey(const ValueKey('search-category-results-songs')),
-              matching: find.byType(SlideTransition),
-            )
-            .first,
-      );
-      expect(backwardVideoTransition.position.value.dx, greaterThan(0));
-      expect(backwardSongTransition.position.value.dx, lessThan(0));
+      expect(rowX('video-0'), greaterThan(restingVideoX));
+      expect(rowX('song-0'), lessThan(restingSongX));
       expect(scrollable.position.pixels, closeTo(offsetBeforeSelection, 0.01));
 
       await tester.pumpAndSettle();

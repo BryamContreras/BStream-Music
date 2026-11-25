@@ -28,6 +28,10 @@ internal class ExternalAudioIntentHandler(private val context: Context) {
         override fun sizeOf(key: String, value: ByteArray): Int = value.size
     }
     private val missingArtworkKeys = LinkedHashSet<String>()
+    private var artworkGeneration = 0L
+
+    val currentArtworkGeneration: Long
+        get() = synchronized(artworkCacheLock) { artworkGeneration }
 
     /**
      * Returns the audio catalog exposed by MediaStore across every mounted
@@ -39,6 +43,7 @@ internal class ExternalAudioIntentHandler(private val context: Context) {
         // A manual catalog refresh is also the point at which externally
         // edited metadata should become visible during this app session.
         synchronized(artworkCacheLock) {
+            artworkGeneration++
             artworkCache.evictAll()
             missingArtworkKeys.clear()
         }
@@ -78,15 +83,22 @@ internal class ExternalAudioIntentHandler(private val context: Context) {
         val targetWidth = artworkWidthBucket(requestedWidth)
         val key = "$targetWidth:$uri"
         val missingKey = uri.toString()
-        synchronized(artworkCacheLock) {
+        val generation = synchronized(artworkCacheLock) {
             artworkCache.get(key)?.let { return it }
             if (missingArtworkKeys.contains(missingKey)) {
                 return null
             }
+            artworkGeneration
         }
 
         val encoded = resolveArtwork(uri, targetWidth)
         synchronized(artworkCacheLock) {
+            // A catalog refresh may have invalidated the cache while we read
+            // this artwork. Finish the original request without filling the
+            // new cache with stale data.
+            if (generation != artworkGeneration) {
+                return encoded?.takeIf { it.isNotEmpty() }
+            }
             if (encoded == null || encoded.isEmpty()) {
                 rememberMissingArtwork(missingKey)
                 return null
@@ -172,13 +184,6 @@ internal class ExternalAudioIntentHandler(private val context: Context) {
             }
             bitmap.recycle()
         }
-    }
-
-    private fun artworkWidthBucket(requestedWidth: Int): Int = when {
-        requestedWidth <= 128 -> 128
-        requestedWidth <= 256 -> 256
-        requestedWidth <= 512 -> 512
-        else -> MAX_ARTWORK_WIDTH
     }
 
     private fun rememberMissingArtwork(key: String) {
@@ -639,6 +644,13 @@ internal class ExternalAudioIntentHandler(private val context: Context) {
         private const val ARTWORK_CACHE_BYTES = 24 * 1024 * 1024
         private const val MAX_MISSING_ARTWORK_KEYS = 512
         private const val ARTWORK_JPEG_QUALITY = 90
+
+        fun artworkWidthBucket(requestedWidth: Int): Int = when {
+            requestedWidth <= 128 -> 128
+            requestedWidth <= 256 -> 256
+            requestedWidth <= 512 -> 512
+            else -> MAX_ARTWORK_WIDTH
+        }
         private val APPLICATION_AUDIO_MIME_TYPES = setOf(
             "application/ogg",
             "application/x-ogg",

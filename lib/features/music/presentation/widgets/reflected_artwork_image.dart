@@ -65,10 +65,7 @@ class _ProgressiveReflectedArtworkImageState
     extends State<ProgressiveReflectedArtworkImage> {
   ui.Image? _raster;
   ui.Image? _source;
-  Rect? _artworkRect;
-  Alignment? _alignment;
-  Size? _viewport;
-  FilterQuality? _filterQuality;
+  _ReflectionGeometry? _geometry;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
@@ -80,26 +77,23 @@ class _ProgressiveReflectedArtworkImageState
           widget.artworkRect.isEmpty) {
         return const SizedBox.shrink();
       }
+      final geometry = (
+        artworkRect: widget.artworkRect,
+        alignment: widget.alignment,
+        viewport: viewport,
+        filterQuality: widget.filterQuality,
+      );
       if (_raster == null ||
-          !identical(_source, widget.image) ||
-          _artworkRect != widget.artworkRect ||
-          _alignment != widget.alignment ||
-          _viewport != viewport ||
-          _filterQuality != widget.filterQuality) {
-        final raster = _rasterizeProgressiveReflection(
-          image: widget.image,
-          artworkRect: widget.artworkRect,
-          alignment: widget.alignment,
-          viewport: viewport,
-          filterQuality: widget.filterQuality,
+          _source?.isCloneOf(widget.image) != true ||
+          _geometry != geometry) {
+        final raster = _progressiveReflectionCache.resolve(
+          widget.image,
+          geometry,
         );
         final previous = _raster;
         _raster = raster;
         _source = widget.image;
-        _artworkRect = widget.artworkRect;
-        _alignment = widget.alignment;
-        _viewport = viewport;
-        _filterQuality = widget.filterQuality;
+        _geometry = geometry;
         previous?.dispose();
       }
       return RawImage(
@@ -115,6 +109,84 @@ class _ProgressiveReflectedArtworkImageState
   void dispose() {
     _raster?.dispose();
     super.dispose();
+  }
+}
+
+typedef _ReflectionGeometry = ({
+  Rect artworkRect,
+  Alignment alignment,
+  Size viewport,
+  FilterQuality filterQuality,
+});
+
+final _progressiveReflectionCache = _ProgressiveReflectionCache();
+
+/// Retains the already filtered pixels across route openings and layout
+/// changes that return to the same geometry. Mounted images own independent
+/// handles so a cache eviction never invalidates an onscreen reflection.
+class _ProgressiveReflectionCache with WidgetsBindingObserver {
+  _ProgressiveReflectionCache() {
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  static const _maximumEntries = 4;
+  static const _maximumBytes = 2 * 1024 * 1024;
+  final _entries =
+      <
+        ({
+          ui.Image sourceIdentity,
+          _ReflectionGeometry geometry,
+          ui.Image raster,
+          int bytes,
+        })
+      >[];
+  int _bytes = 0;
+
+  ui.Image resolve(ui.Image source, _ReflectionGeometry geometry) {
+    final index = _entries.indexWhere(
+      (entry) =>
+          entry.geometry == geometry && entry.sourceIdentity.isCloneOf(source),
+    );
+    if (index >= 0) {
+      final entry = _entries.removeAt(index);
+      _entries.add(entry);
+      return entry.raster.clone();
+    }
+
+    final raster = _rasterizeProgressiveReflection(
+      image: source,
+      artworkRect: geometry.artworkRect,
+      alignment: geometry.alignment,
+      viewport: geometry.viewport,
+      filterQuality: geometry.filterQuality,
+    );
+    final bytes = raster.width * raster.height * 4;
+    if (bytes > _maximumBytes) return raster;
+    while (_entries.length >= _maximumEntries ||
+        _bytes + bytes > _maximumBytes) {
+      final entry = _entries.removeAt(0);
+      entry.raster.dispose();
+      _bytes -= entry.bytes;
+    }
+    _entries.add((
+      // isCloneOf also works on disposed handles. Retain the identity without
+      // retaining the original decoded cover pixels outside Flutter's cache.
+      sourceIdentity: source.clone()..dispose(),
+      geometry: geometry,
+      raster: raster.clone(),
+      bytes: bytes,
+    ));
+    _bytes += bytes;
+    return raster;
+  }
+
+  @override
+  void didHaveMemoryPressure() {
+    for (final entry in _entries) {
+      entry.raster.dispose();
+    }
+    _entries.clear();
+    _bytes = 0;
   }
 }
 

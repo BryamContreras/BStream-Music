@@ -22,7 +22,10 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.File
 import java.util.ArrayDeque
 import java.util.UUID
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.Executors
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
@@ -35,7 +38,16 @@ class MainActivity : AudioServiceActivity(), BStreamHomeWidgetEnginePlugin.Actio
     // Artwork reads are independent from catalog/intent resolution. Two
     // workers keep visible rows responsive without creating unbounded metadata
     // concurrency on slower storage.
-    private val localArtworkExecutor = Executors.newFixedThreadPool(2)
+    private val localArtworkExecutor = ThreadPoolExecutor(
+        2, 2, 30, TimeUnit.SECONDS, ArrayBlockingQueue(64),
+    ).apply { allowCoreThreadTimeOut(true) }
+    private data class LocalArtworkKey(
+        val audioUri: String,
+        val targetWidth: Int,
+        val generation: Long,
+    )
+    // MethodChannel callbacks and this map belong to the main thread.
+    private val pendingLocalArtwork = mutableMapOf<LocalArtworkKey, MutableList<MethodChannel.Result>>()
     private var externalAudioChannel: MethodChannel? = null
     private val pendingExternalAudioEvents = ArrayDeque<Map<String, Any?>>()
     private var appActivationChannel: MethodChannel? = null
@@ -241,6 +253,16 @@ class MainActivity : AudioServiceActivity(), BStreamHomeWidgetEnginePlugin.Actio
         localAudioQualityPlugin?.dispose()
         externalAudioExecutor.shutdownNow()
         localArtworkExecutor.shutdownNow()
+        for (requests in pendingLocalArtwork.values) {
+            for (result in requests) {
+                result.error(
+                    "activity_destroyed",
+                    "The Android activity was closed before artwork loading completed.",
+                    null,
+                )
+            }
+        }
+        pendingLocalArtwork.clear()
         homeWidgetBridge?.detachActionRelay(this)
         homeWidgetBridge = null
         pendingLocalAudioPermissionResult?.error(
@@ -682,24 +704,37 @@ class MainActivity : AudioServiceActivity(), BStreamHomeWidgetEnginePlugin.Actio
             result.error("invalid_audio_uri", "The audio URI is missing.", null)
             return
         }
-        val targetWidth = (call.argument<Number>("targetWidth")?.toInt() ?: 256)
-            .coerceIn(32, 1280)
+        val targetWidth = ExternalAudioIntentHandler.artworkWidthBucket(
+            (call.argument<Number>("targetWidth")?.toInt() ?: 256).coerceIn(32, 1280),
+        )
+        val key = LocalArtworkKey(
+            audioUri, targetWidth, externalAudioHandler.currentArtworkGeneration,
+        )
+        pendingLocalArtwork[key]?.let {
+            it.add(result)
+            return
+        }
+        pendingLocalArtwork[key] = mutableListOf(result)
         try {
             localArtworkExecutor.execute {
-                try {
-                    val bytes = externalAudioHandler.loadArtwork(audioUri, targetWidth)
-                    mainHandler.post { result.success(bytes) }
+                val bytes = try {
+                    externalAudioHandler.loadArtwork(audioUri, targetWidth)
                 } catch (error: Throwable) {
                     Log.w(EXTERNAL_AUDIO_TAG, "Could not load local audio artwork", error)
-                    mainHandler.post { result.success(null) }
+                    null
+                }
+                mainHandler.post {
+                    pendingLocalArtwork.remove(key)?.forEach { it.success(bytes) }
                 }
             }
         } catch (error: Throwable) {
-            result.error(
-                "local_artwork_unavailable",
-                error.message ?: "Local artwork is unavailable.",
-                null,
-            )
+            pendingLocalArtwork.remove(key)?.forEach {
+                it.error(
+                    "local_artwork_unavailable",
+                    error.message ?: "Local artwork is unavailable.",
+                    null,
+                )
+            }
         }
     }
 

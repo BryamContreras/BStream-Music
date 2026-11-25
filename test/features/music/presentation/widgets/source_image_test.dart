@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -8,8 +9,65 @@ import 'package:bstream_music/features/music/presentation/widgets/source_image.d
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+// BaseCacheManager's public IO boundary uses package:file's File type.
+// ignore: depend_on_referenced_packages
+import 'package:file/file.dart' as fs;
+// ignore: depend_on_referenced_packages
+import 'package:file/local.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:image/image.dart' as image_codec;
 
 void main() {
+  testWidgets('opaque upgrade metadata verifies the downloaded bytes', (
+    tester,
+  ) async {
+    final directory = Directory.systemTemp.createTempSync('bstream-jpeg-');
+    addTearDown(() {
+      PaintingBinding.instance.imageCache
+        ..clear()
+        ..clearLiveImages();
+      directory.deleteSync(recursive: true);
+    });
+    final cache = _ArtworkFixtureCache(
+      const LocalFileSystem().file('${directory.path}/cover-jpeg'),
+    );
+    final fixture = image_codec.Image(width: 8, height: 8, numChannels: 4);
+    cache.file.writeAsBytesSync(image_codec.encodeJpg(fixture));
+    final provider = CachedArtworkImageProvider(
+      'https://i.ytimg.com/vi/dmW68lzaaqs/hq720.jpg',
+      cacheManager: cache,
+    );
+
+    Future<void> decode() async {
+      final stream = provider.resolve(ImageConfiguration.empty);
+      final done = Completer<void>();
+      final listener = ImageStreamListener((info, _) {
+        info.dispose();
+        done.complete();
+      }, onError: done.completeError);
+      stream.addListener(listener);
+      try {
+        await done.future;
+      } finally {
+        stream.removeListener(listener);
+      }
+    }
+
+    await tester.runAsync(decode);
+    expect(provider.hasVerifiedOpaqueJpeg, isTrue);
+    expect(await provider.evict(), isTrue);
+    PaintingBinding.instance.imageCache.clearLiveImages();
+    cache.file = const LocalFileSystem().file(
+      '${directory.path}/transparent-png',
+    )..writeAsBytesSync(image_codec.encodePng(fixture));
+    await tester.runAsync(decode);
+    expect(
+      provider.hasVerifiedOpaqueJpeg,
+      isFalse,
+      reason: 'A successful decode at a .jpg URL need not be an opaque JPEG.',
+    );
+  });
+
   testWidgets(
     'custom artwork painting reuses decoded cover and fallback pixels',
     (tester) async {
@@ -678,4 +736,17 @@ void main() {
     expect(find.text('fallback'), findsNothing);
     expect(tester.takeException(), isNull);
   });
+}
+
+class _ArtworkFixtureCache extends Fake implements BaseCacheManager {
+  _ArtworkFixtureCache(this.file);
+
+  fs.File file;
+
+  @override
+  Future<fs.File> getSingleFile(
+    String url, {
+    String? key,
+    Map<String, String>? headers,
+  }) async => file;
 }

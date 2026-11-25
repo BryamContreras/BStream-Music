@@ -201,6 +201,150 @@ void main() {
     expect(layers.every((layer) => layer.backdropKey == null), isTrue);
   });
 
+  testWidgets('padded capture resolves the actual moving lens bounds', (
+    tester,
+  ) async {
+    final lens = ValueNotifier(const Rect.fromLTWH(10, 0, 100, 60));
+    addTearDown(lens.dispose);
+    final calls = <(Rect, bool)>[];
+    await tester.pumpWidget(
+      _harness(
+        child: ValueListenableBuilder(
+          valueListenable: lens,
+          builder: (context, bounds, _) =>
+              LiquidGlassSurface.debugBackdropLayerHost(
+                devicePixelRatio: 1,
+                viewportSize: const Size(800, 600),
+                blurFilter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                lensClip: RRect.fromRectAndRadius(
+                  bounds,
+                  const Radius.circular(30),
+                ),
+                resolveMaterial: (bounds, bounded) {
+                  calls.add((bounds, bounded));
+                  return ui.ImageFilter.blur(sigmaX: 2, sigmaY: 2);
+                },
+              ),
+        ),
+      ),
+    );
+    final renderer =
+        tester.renderObject(
+              find.byWidgetPredicate(
+                (widget) =>
+                    widget.runtimeType.toString() ==
+                    '_LiquidGlassBackdropLayerHost',
+              ),
+            )
+            as dynamic;
+    for (final width in [100.0, 108.0, 116.0, 108.0, 100.0]) {
+      lens.value = Rect.fromLTWH((120 - width) / 2, 0, width, 60);
+      await tester.pump();
+      _compose(tester);
+      expect(renderer.size, const Size(120, 60));
+      expect(renderer.debugUsesBoundedInput, isTrue);
+      expect(calls.last, (lens.value, true));
+    }
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('padded capture restores the native clip under scaling', (
+    tester,
+  ) async {
+    final scale = ValueNotifier(1.0);
+    final opacity = ValueNotifier(1.0);
+    addTearDown(scale.dispose);
+    addTearDown(opacity.dispose);
+    final calls = <(Rect, bool)>[];
+    const lensBounds = Rect.fromLTWH(10, 0, 100, 60);
+    await tester.pumpWidget(
+      _harness(
+        child: ValueListenableBuilder<double>(
+          valueListenable: scale,
+          child: RepaintBoundary(
+            child: LiquidGlassSurface.debugBackdropLayerHost(
+              devicePixelRatio: 1,
+              viewportSize: const Size(800, 600),
+              blurFilter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+              pauseBackdropDuringOpacity: true,
+              lensClip: RRect.fromRectAndRadius(
+                lensBounds,
+                const Radius.circular(30),
+              ),
+              resolveMaterial: (bounds, bounded) {
+                calls.add((bounds, bounded));
+                return ui.ImageFilter.blur(sigmaX: 2, sigmaY: 2);
+              },
+            ),
+          ),
+          builder: (context, value, child) => ValueListenableBuilder<double>(
+            valueListenable: opacity,
+            child: child,
+            builder: (context, alpha, child) => Opacity(
+              opacity: alpha,
+              child: Transform.scale(scale: value, child: child),
+            ),
+          ),
+        ),
+      ),
+    );
+    _compose(tester);
+    expect(calls.last, (lensBounds, true));
+    scale.value = 0.9;
+    await tester.pump();
+    _compose(tester);
+    final filters = tester.layers.whereType<BackdropFilterLayer>().toList();
+    expect(calls.last.$2, isFalse);
+    expect(_engineLayer(filters.first), isNotNull);
+    expect(_engineLayer(filters.last), isNull);
+    expect(_engineLayer(filters.first.parent!), isA<ui.ClipRRectEngineLayer>());
+    opacity.value = 0.5;
+    await tester.pump();
+    _compose(tester);
+    expect(_engineLayer(filters.first), isNull);
+    expect(_engineLayer(filters.last), isNull);
+    expect(_engineLayer(filters.first.parent!), isNull);
+    scale.value = 1.0;
+    opacity.value = 1.0;
+    await tester.pump();
+    _compose(tester);
+    expect(calls.last, (lensBounds, true));
+    expect(_engineLayer(filters.first), isNotNull);
+    expect(_engineLayer(filters.last), isNotNull);
+    expect(_engineLayer(filters.first.parent!), isNull);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('padded capture restores the clipped blur after shader failure', (
+    tester,
+  ) async {
+    final blur = ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8);
+    final lensClip = RRect.fromRectAndRadius(
+      const Rect.fromLTWH(10, 0, 100, 60),
+      const Radius.circular(30),
+    );
+    await tester.pumpWidget(
+      _harness(
+        child: LiquidGlassSurface.debugBackdropLayerHost(
+          devicePixelRatio: 1,
+          viewportSize: const Size(800, 600),
+          blurFilter: blur,
+          lensClip: lensClip,
+          resolveMaterial: (_, _) =>
+              const ui.ColorFilter.mode(Color(0x00000000), BlendMode.src),
+          materialIsRefractive: () => false,
+        ),
+      ),
+    );
+    _compose(tester);
+    final filters = tester.layers.whereType<BackdropFilterLayer>().toList();
+    expect(filters.first.filter, blur);
+    expect(_engineLayer(filters.first), isNotNull);
+    expect(_engineLayer(filters.last), isNull);
+    expect(_engineLayer(filters.first.parent!), isA<ui.ClipRRectEngineLayer>());
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('fractional physical origin is retained without changing size', (
     tester,
   ) async {

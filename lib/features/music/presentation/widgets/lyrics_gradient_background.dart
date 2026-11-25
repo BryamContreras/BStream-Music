@@ -222,6 +222,9 @@ class _LyricsGradientPainter extends CustomPainter {
   final Listenable? animation;
   final _GradientPose Function()? pose;
   final Paint _paint = Paint();
+  late final Color _baseColor = _shade(
+    tone.withLightness(animation != null ? .31 : .34).toColor(),
+  );
 
   // Applying the black scrim to the gradient stops preserves the color of
   // the composite and avoids a separate full-screen blend on every frame.
@@ -243,7 +246,7 @@ class _LyricsGradientPainter extends CustomPainter {
       rect,
       _paint
         ..shader = null
-        ..color = _shade(tone.withLightness(moving ? .31 : .34).toColor()),
+        ..color = _baseColor,
     );
     void corner(Alignment center, double hue, double lightness) {
       final color = _shade(

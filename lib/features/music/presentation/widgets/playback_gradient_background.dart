@@ -12,6 +12,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../providers/music_providers.dart';
 import '../providers/playback_artwork_provider.dart';
 import 'app_background_photo.dart';
+import 'artwork_header_snapshot.dart';
 import 'artwork_video_palette.dart';
 import 'reflected_artwork_image.dart';
 import 'source_image.dart';
@@ -57,16 +58,20 @@ class BrowsingTabBackground extends ConsumerWidget {
         ],
       );
     }
+    final overlay = AppColors.tabBackgroundOverlayFor(context);
+    // A uniform wash over an opaque gradient can be blended into its stops.
     return DecoratedBox(
       key: const ValueKey('browsing-tab-background-surface'),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [colors.top, colors.bottom],
+          colors: [
+            Color.alphaBlend(overlay, colors.top),
+            Color.alphaBlend(overlay, colors.bottom),
+          ],
         ),
       ),
-      child: ColoredBox(color: AppColors.tabBackgroundOverlayFor(context)),
     );
   }
 }
@@ -465,7 +470,7 @@ class _AnimatedPlaybackArtworkState extends State<_AnimatedPlaybackArtwork> {
     final source = widget.source;
     Widget background = widget.fallback;
     if (source != null && source.isNotEmpty) {
-      final image = _PlaybackBackgroundImage(
+      Widget image([ArtworkSnapshotFrame? onFrame]) => _PlaybackBackgroundImage(
         source: source,
         fallbackSource: widget.fallbackSource,
         cacheWidth: widget.cacheWidth,
@@ -474,11 +479,30 @@ class _AnimatedPlaybackArtworkState extends State<_AnimatedPlaybackArtwork> {
         cacheSmallBlur: widget.cacheSmallBlur,
         blurSigma: widget.blurSigma,
         reflectionArtworkRect: widget.reflectionArtworkRect,
+        onFrame: onFrame,
       );
       background = ClipRect(
         child: widget.reflectionArtworkRect != null || widget.cacheSmallBlur
-            ? image
-            : _liveArtworkBlur(image, widget.scale, sigma: widget.blurSigma),
+            ? image()
+            : ArtworkHeaderSnapshot(
+                revision: (
+                  source,
+                  widget.fallbackSource,
+                  widget.cacheWidth,
+                  widget.scale,
+                  widget.blurSigma,
+                ),
+                // A QHD player background can occupy slightly more than
+                // four million physical pixels. The shared budget still
+                // limits all retained artwork textures together.
+                maximumPixels: 5 * 1024 * 1024,
+                settleTime: const Duration(milliseconds: 600),
+                builder: (_, onFrame) => _liveArtworkBlur(
+                  image(onFrame),
+                  widget.scale,
+                  sigma: widget.blurSigma,
+                ),
+              ),
       );
     }
     final artwork = SizedBox.expand(
@@ -521,6 +545,7 @@ class _PlaybackBackgroundImage extends StatelessWidget {
     required this.cacheSmallBlur,
     required this.blurSigma,
     required this.reflectionArtworkRect,
+    this.onFrame,
   });
 
   final String source;
@@ -531,6 +556,7 @@ class _PlaybackBackgroundImage extends StatelessWidget {
   final double blurSigma;
   final Widget fallback;
   final Rect? reflectionArtworkRect;
+  final ArtworkSnapshotFrame? onFrame;
 
   @override
   Widget build(BuildContext context) {
@@ -540,7 +566,14 @@ class _PlaybackBackgroundImage extends StatelessWidget {
       fallbackSource: fallbackSource,
       cacheWidth: cacheWidth,
       fit: BoxFit.cover,
-      fallback: cacheSmallBlur && reflectionRect == null
+      fallback: onFrame != null
+          ? Builder(
+              builder: (context) {
+                onFrame!(null);
+                return fallback;
+              },
+            )
+          : cacheSmallBlur && reflectionRect == null
           ? _liveArtworkBlur(fallback, scale)
           : fallback,
       imageBuilder: reflectionRect != null
@@ -551,7 +584,12 @@ class _PlaybackBackgroundImage extends StatelessWidget {
             )
           : cacheSmallBlur
           ? _buildSmallBlur
-          : null,
+          : onFrame == null
+          ? null
+          : (context, image) {
+              onFrame!(image.image);
+              return image;
+            },
     );
   }
 

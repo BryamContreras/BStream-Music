@@ -475,11 +475,16 @@ class DownloadController extends Notifier<Map<String, DownloadTaskState>> {
         return;
       }
       debugPrint('Audio download failed: $error\n$stackTrace');
+      final errorMessage =
+          error is DownloaderException &&
+              error.code == 'flac_download_interrupted'
+          ? ref.read(appStringsProvider).flacDownloadInterrupted
+          : error.toString();
       state = {
         ...state,
         track.url: active!.copyWith(
           status: DownloadProgressStatus.failed,
-          errorMessage: error.toString(),
+          errorMessage: errorMessage,
         ),
       };
       _scheduleCleanup(track.url, const Duration(seconds: 10));

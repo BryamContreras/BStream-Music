@@ -47,8 +47,27 @@ class EqualizerSettingsPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = ref.watch(appStringsProvider);
-    final settings = ref.watch(settingsControllerProvider);
-    final runtime = ref.watch(equalizerRuntimeProvider);
+    final settings = ref.watch(
+      settingsControllerProvider.select(
+        (state) => state.whenData(
+          (settings) => (
+            equalizer: settings.equalizer,
+            selectedPreset: settings.equalizerProfiles.selectedFor(
+              settings.equalizer.normalized,
+            ),
+          ),
+        ),
+      ),
+    );
+    final runtime = ref.watch(
+      equalizerRuntimeProvider.select(
+        (state) => (
+          supported: state.supported,
+          applying: state.applying,
+          error: state.error,
+        ),
+      ),
+    );
     final available = ref.watch(equalizerAvailableProvider);
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
@@ -228,9 +247,7 @@ class EqualizerSettingsPage extends ConsumerWidget {
                               ),
                             ),
                             presets: _EqualizerPresetControls(
-                              selected: state.equalizerProfiles.selectedFor(
-                                equalizer,
-                              ),
+                              selected: state.selectedPreset,
                               strings: strings,
                               available: available,
                               onChoose: (preset) => update(

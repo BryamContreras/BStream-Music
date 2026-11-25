@@ -368,6 +368,9 @@ class _WavyPlaybackTrackPainter extends CustomPainter {
   final Paint _thumbShadowPaint;
   final Paint _thumbFillPaint;
   final Paint _thumbStrokePaint;
+  final Path _backPath = Path();
+  final Path _frontPath = Path();
+  final List<double> _crestVisibilities = List<double>.filled(2, 0);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -439,6 +442,7 @@ class _WavyPlaybackTrackPainter extends CustomPainter {
           .toDouble();
 
       Path waveLayerPath(
+        Path path,
         List<
           ({
             double center,
@@ -450,17 +454,18 @@ class _WavyPlaybackTrackPainter extends CustomPainter {
         >
         crests,
       ) {
-        final path = Path()..moveTo(trackStart, waveBaseY);
-        final crestVisibilities = <double>[
-          for (final crest in crests)
-            () {
-              final rawVisibility = math.min(
-                ((crest.center - trackStart) / crest.radius).clamp(0.0, 1.0),
-                ((activeEnd - crest.center) / crest.radius).clamp(0.0, 1.0),
-              );
-              return rawVisibility * rawVisibility * (3 - (2 * rawVisibility));
-            }(),
-        ];
+        path
+          ..reset()
+          ..moveTo(trackStart, waveBaseY);
+        for (var index = 0; index < crests.length; index++) {
+          final crest = crests[index];
+          final rawVisibility = math.min(
+            ((crest.center - trackStart) / crest.radius).clamp(0.0, 1.0),
+            ((activeEnd - crest.center) / crest.radius).clamp(0.0, 1.0),
+          );
+          _crestVisibilities[index] =
+              rawVisibility * rawVisibility * (3 - (2 * rawVisibility));
+        }
         final sampleStep = math.max(1.5, activeLength / _maximumWaveSamples);
         for (var x = trackStart; x <= activeEnd; x += sampleStep) {
           var combinedHeight = 0.0;
@@ -484,7 +489,7 @@ class _WavyPlaybackTrackPainter extends CustomPainter {
                 maxWaveHeight *
                 crest.heightFactor *
                 heightScale *
-                crestVisibilities[index] *
+                _crestVisibilities[index] *
                 edgeVisibility *
                 asymmetricProfile;
             combinedHeight = math.max(combinedHeight, crestHeight);
@@ -496,7 +501,7 @@ class _WavyPlaybackTrackPainter extends CustomPainter {
           ..close();
       }
 
-      final backWave = waveLayerPath([
+      final backWave = waveLayerPath(_backPath, [
         movingCrest(
           offset: 0.02,
           speedVariation: 0.38,
@@ -520,7 +525,7 @@ class _WavyPlaybackTrackPainter extends CustomPainter {
       ]);
       canvas.drawPath(backWave, _backPaint);
 
-      final frontWave = waveLayerPath([
+      final frontWave = waveLayerPath(_frontPath, [
         movingCrest(
           offset: 0.25,
           speedVariation: -0.34,

@@ -482,7 +482,7 @@ void main() {
     );
   }
 
-  test('uses the public Monochrome API listed in a WioLand catalog', () async {
+  test('uses Monochrome for streaming and downloads from WioLand', () async {
     const recordingId = '157949442196242432';
     final transport = _Transport((request) {
       final uri = request.uri;
@@ -519,8 +519,21 @@ void main() {
         case ('tracks.monochrome.st', '/track/$recordingId'):
           expect(request.maximumBytes, 42);
           expect(request.readPrefix, isTrue);
-          expect(request.headers['Range'], 'bytes=0-41');
-          return _flac();
+          final range = request.headers['Range'];
+          if (range != null) {
+            expect(range, 'bytes=0-41');
+            expect(request.timeout, const Duration(seconds: 6));
+            return _flac();
+          }
+          expect(request.timeout, greaterThan(const Duration(seconds: 8)));
+          return BoundedAudioHttpResponse(
+            statusCode: 200,
+            body: _flac().body,
+            headers: const {
+              'content-length': '18000000',
+              'accept-ranges': 'bytes',
+            },
+          );
         default:
           throw StateError('Unexpected request $uri');
       }
@@ -536,13 +549,40 @@ void main() {
       jsonDecode(jsonEncode(sources.single.toJson())),
     );
     expect(restored?.protocol, AudioExtensionProtocol.monochrome);
-    final audio = await resolver.findUpgrade(_track, extensions: [restored!]);
+    final extensions = [restored!];
+    final downloaded = await resolver.findUpgrade(
+      _track,
+      extensions: extensions,
+      forDownload: true,
+    );
+    final audio = await resolver.findUpgrade(_track, extensions: extensions);
 
     expect(audio?.streamUrl, 'https://tracks.monochrome.st/track/$recordingId');
     expect(audio?.bitDepth, 16);
+    expect(downloaded?.streamUrl, audio?.streamUrl);
+    expect(downloaded?.bitDepth, 16);
+    expect(downloaded?.rangedContentLength, 18000000);
+    expect(
+      await resolver.findUpgrade(
+        _track,
+        extensions: extensions,
+        forDownload: true,
+      ),
+      same(audio),
+    );
+    expect(
+      await resolver.findUpgrade(
+        _track,
+        extensions: [restored.copyWith(allowDownloads: false)],
+        forDownload: true,
+      ),
+      isNull,
+    );
     expect(transport.requests.map((request) => request.uri.path), [
       '/bitchord/manifest.json',
       '/bitchord/sources.json',
+      '/search/tracks',
+      '/track/$recordingId',
       '/search/tracks',
       '/track/$recordingId',
     ]);
@@ -675,6 +715,7 @@ typedef _Request = ({
   Map<String, String> headers,
   int maximumBytes,
   bool readPrefix,
+  Duration? timeout,
 });
 
 class _Transport implements BoundedAudioHttpTransport {
@@ -696,6 +737,7 @@ class _Transport implements BoundedAudioHttpTransport {
       headers: headers,
       maximumBytes: maximumBytes,
       readPrefix: readPrefix,
+      timeout: timeout,
     );
     requests.add(request);
     return respond(request);
