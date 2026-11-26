@@ -1,0 +1,258 @@
+name: Android Impeller gradient candidate
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ci/impeller-gradient-exact
+
+permissions:
+  contents: read
+
+concurrency:
+  group: impeller-gradient-exact-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: "3.47.9"
+  FLUTTER_FRAMEWORK_REVISION: c197ca5199e9ee5661e865596c9c07294dfab51c
+  FLUTTER_ENGINE_REVISION: 89c39edfdfae2949f6806e4a315c0c08522238b7
+  DEPOT_TOOLS_REVISION: 35958655b1e171aec866a7615d22a99a737091d1
+
+jobs:
+  native-engine:
+    name: Compile ${{ matrix.variant }} Android arm64 release engine
+    if: github.ref == 'refs/heads/ci/impeller-gradient-exact'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: region-v2
+            patch: tool/impeller/downsample-scissor.patch
+            digest: 1eda686211af51a267989498aa921b96c3876fca57366b54b769adbacafb3dee
+          - variant: gradient-two-stop-exact
+            patch: tool/impeller/gradient-two-stop-exact-full.patch
+            digest: 84d25fcefe0930db9890ff9e518b16f1c39d2dc659db66c4f71a4555644fda2d
+    env:
+      BSTREAM_IMPELLER_VARIANT: ${{ matrix.variant }}
+      BSTREAM_EXPECTED_PATCH: ${{ matrix.patch }}
+      BSTREAM_EXPECTED_PATCH_SHA: ${{ matrix.digest }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Restore exact-patch native engine
+        id: engine-cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: build/bstream-impeller/ci-engine
+          key: impeller-gradient-release-arm64-${{ matrix.variant }}-${{ env.FLUTTER_FRAMEWORK_REVISION }}-${{ hashFiles(matrix.patch, 'tool/impeller/build_android_engine.sh', 'tool/impeller/geometry_native_test.cc', 'tool/impeller/test_geometry.sh') }}
+
+      - name: Reserve engine build disk space
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This isolated hosted runner builds only the native engine. Its
+          # preinstalled mobile SDKs/tools are not needed (the engine fetches
+          # its own pinned toolchain). Leave app-build runners untouched.
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/share/swift /opt/hostedtoolcache
+          df -h /
+          test "$(df -Pk / | awk 'NR==2 {print $4}')" -ge 30000000
+
+      - name: Fetch pinned Flutter engine dependencies
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          engine_root="$RUNNER_TEMP/bstream-engine-src"
+          mkdir -p "$engine_root"
+          git init "$engine_root/depot_tools"
+          git -C "$engine_root/depot_tools" fetch --depth=1 https://chromium.googlesource.com/chromium/tools/depot_tools.git "$DEPOT_TOOLS_REVISION"
+          git -C "$engine_root/depot_tools" checkout --detach FETCH_HEAD
+          test "$(git -C "$engine_root/depot_tools" rev-parse HEAD)" = "$DEPOT_TOOLS_REVISION"
+          git clone --depth=1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git "$engine_root/flutter"
+          test "$(git -C "$engine_root/flutter" rev-parse HEAD)" = "$FLUTTER_FRAMEWORK_REVISION"
+          cd "$engine_root/flutter"
+          # No Fuchsia or Web engine is built here. Keep Android and Linux-host
+          # dependencies and the standard sync hooks.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("engine/scripts/standard.gclient")
+          config = p.read_text().replace('"custom_deps": {},',
+              '"custom_deps": {},\n    "custom_vars": {"download_fuchsia_deps": False, "download_esbuild": False},')
+          Path(".gclient").write_text(config)
+          PY
+          export PATH="$engine_root/depot_tools:$PATH"
+          export DEPOT_TOOLS_UPDATE=0
+          gclient sync --no-history --jobs 6
+          df -h /
+
+      - name: Test geometry and compile release engine
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          BSTREAM_ENGINE_JOBS: "4"
+        run: |
+          set -euo pipefail
+          engine_root="$RUNNER_TEMP/bstream-engine-src"
+          bash tool/impeller/test_geometry.sh "$engine_root/flutter"
+          bash tool/impeller/build_android_engine.sh release "$engine_root/flutter" build/bstream-impeller/ci-engine/libflutter.so
+
+      - name: Verify native build identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          p = Path("build/bstream-impeller/ci-engine/libflutter.so")
+          m = json.loads(p.with_suffix(".so.json").read_text())
+          assert m["mode"] == "release" and m["abi"] == "arm64-v8a"
+          assert m["frameworkRevision"] == "c197ca5199e9ee5661e865596c9c07294dfab51c"
+          assert m["engineRevision"] == "89c39edfdfae2949f6806e4a315c0c08522238b7"
+          patch = Path(os.environ["BSTREAM_EXPECTED_PATCH"]).read_bytes()
+          assert m["patchSha256"] == hashlib.sha256(patch).hexdigest() == os.environ["BSTREAM_EXPECTED_PATCH_SHA"]
+          assert m["librarySha256"] == hashlib.sha256(p.read_bytes()).hexdigest()
+          print(json.dumps(m, indent=2))
+          PY
+
+      - name: Upload release engine and provenance
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: impeller-${{ matrix.variant }}-native-release-arm64
+          path: build/bstream-impeller/ci-engine/
+          if-no-files-found: error
+          retention-days: 14
+
+  android-candidate:
+    name: Signed v2 control and two-stop release APKs
+    needs: native-engine
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      BSTREAM_ANDROID_KEYSTORE_BASE64: ${{ secrets.BSTREAM_ANDROID_KEYSTORE_BASE64 }}
+      BSTREAM_ANDROID_STORE_PASSWORD: ${{ secrets.BSTREAM_ANDROID_STORE_PASSWORD }}
+      BSTREAM_ANDROID_KEY_ALIAS: ${{ secrets.BSTREAM_ANDROID_KEY_ALIAS }}
+      BSTREAM_ANDROID_KEY_PASSWORD: ${{ secrets.BSTREAM_ANDROID_KEY_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Download the v2 release engine
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: impeller-region-v2-native-release-arm64
+          path: build/bstream-impeller/region-v2
+      - name: Download the gradient release engine
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: impeller-gradient-two-stop-exact-native-release-arm64
+          path: build/bstream-impeller/gradient-two-stop-exact
+
+      - name: Configure Android release signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          for variable in BSTREAM_ANDROID_KEYSTORE_BASE64 BSTREAM_ANDROID_STORE_PASSWORD BSTREAM_ANDROID_KEY_ALIAS BSTREAM_ANDROID_KEY_PASSWORD; do
+            if [[ -z "${!variable:-}" ]]; then
+              echo "Required GitHub secret is missing: $variable" >&2
+              exit 1
+            fi
+          done
+          keystore="$RUNNER_TEMP/bstream-impeller-candidate.jks"
+          printf '%s' "$BSTREAM_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          chmod 600 "$keystore"
+          echo "BSTREAM_ANDROID_STORE_FILE=$keystore" >> "$GITHUB_ENV"
+
+      - name: Create mode-matched Maven repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat "$FLUTTER_ROOT/bin/internal/engine.version")" = "$FLUTTER_ENGINE_REVISION"
+          version="1.0.0-$FLUTTER_ENGINE_REVISION"
+          official="$RUNNER_TEMP/arm64_v8a_release-$version.jar"
+          curl --fail --location --retry 3 \
+            "https://storage.googleapis.com/download.flutter.io/io/flutter/arm64_v8a_release/$version/arm64_v8a_release-$version.jar" \
+            --output "$official"
+          for variant in region-v2 gradient-two-stop-exact; do
+            python3 tool/impeller/create_engine_maven.py --mode release --variant "$variant" \
+              --library "build/bstream-impeller/$variant/libflutter.so" \
+              --repo "build/bstream-impeller/maven-$variant" --official-jar "$official"
+          done
+
+      - name: Resolve dependencies and verify source
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter pub get --enforce-lockfile
+          dart format --output=none --set-exit-if-changed lib test
+          flutter analyze
+          flutter test test/features/music/presentation/widgets/lyrics_text_style_transition_test.dart
+
+      - name: Build signed comparison APKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_number="$(sed -nE 's/^version: [^+]+\+([0-9]+)$/\1/p' pubspec.yaml)"
+          test -n "$base_number"
+          # Match the existing ARM64 split's installed version-code convention.
+          number="$((base_number + 2000))"
+          mkdir -p dist/impeller-gradient-exact
+          for variant in region-v2 gradient-two-stop-exact; do
+            flutter build apk --release --target-platform android-arm64 --build-number "$number" \
+              --android-project-arg bstream-candidate-arm64=true \
+              --android-project-arg bstream-impeller-engine-mode=release \
+              --android-project-arg "bstream-impeller-engine-variant=$variant" \
+              --android-project-arg "bstream-impeller-engine-repo=$PWD/build/bstream-impeller/maven-$variant"
+            cp build/app/outputs/flutter-apk/app-release.apk "dist/impeller-gradient-exact/BStream-$variant-arm64.apk"
+          done
+
+      - name: Verify signing, ABI and isolated engine replacement
+        shell: bash
+        run: |
+          set -euo pipefail
+          aapt2="$(find "$ANDROID_HOME/build-tools" -type f -name aapt2 | sort -V | tail -n 1)"
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -x "$aapt2" && test -x "$apksigner"
+          python3 tool/impeller/verify_candidate_pair.py \
+            --control dist/impeller-gradient-exact/BStream-region-v2-arm64.apk \
+            --candidate dist/impeller-gradient-exact/BStream-gradient-two-stop-exact-arm64.apk \
+            --control-library build/bstream-impeller/region-v2/libflutter.so \
+            --library build/bstream-impeller/gradient-two-stop-exact/libflutter.so \
+            --aapt2 "$aapt2" --apksigner "$apksigner" \
+            --output dist/impeller-gradient-exact/identity.json
+          for variant in region-v2 gradient-two-stop-exact; do
+            cp "build/bstream-impeller/$variant/libflutter.so.json" "dist/impeller-gradient-exact/$variant-native.json"
+            cp "build/bstream-impeller/maven-$variant/bstream-engine-manifest.json" "dist/impeller-gradient-exact/$variant-maven.json"
+          done
+
+      - name: Upload signed candidate and control
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: BStream-Android-Gradient-Exact-arm64
+          path: dist/impeller-gradient-exact/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove temporary signing material
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/bstream-impeller-candidate.jks"

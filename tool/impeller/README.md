@@ -97,3 +97,36 @@ La validación de release, otras arquitecturas, S22 Ultra, Mali y 90 Hz debe
 realizarse con el mismo protocolo de presentación y comparación visual
 antes de habilitar el motor personalizado en las compilaciones de
 distribución.
+
+## Candidata de gradientes de dos paradas
+
+La rama `ci/impeller-gradient-exact` compara el motor regional v2 con el mismo
+motor y un shader especializado. El workflow `android-impeller-gradient-exact.yml`
+compila ambos motores Android arm64 en modo release y usa los mismos fuentes
+de BStream, SDK y clave de firma para empaquetar las dos APK.
+
+La candidata usa `gradient-two-stop-exact-full.patch` con SHA-256
+`84d25fcefe0930db9890ff9e518b16f1c39d2dc659db66c4f71a4555644fda2d`.
+El parche contiene la base v2 y el fragment shader nuevo. Para seleccionar esta
+variante localmente, desde un checkout aislado de Flutter 3.47.9 con las
+dependencias del motor sincronizadas, ejecute en el directorio de BStream:
+
+```bash
+variant=gradient-two-stop-exact
+out="$PWD/build/bstream-impeller/$variant"
+BSTREAM_IMPELLER_VARIANT="$variant" bash tool/impeller/build_android_engine.sh release "$FLUTTER_CHECKOUT" "$out/libflutter.so"
+python3 tool/impeller/create_engine_maven.py --mode release --variant "$variant" --library "$out/libflutter.so" --repo "$out/maven"
+flutter build apk --release --target-platform android-arm64 \
+  --android-project-arg bstream-candidate-arm64=true \
+  --android-project-arg bstream-impeller-engine-mode=release \
+  --android-project-arg "bstream-impeller-engine-variant=$variant" \
+  --android-project-arg "bstream-impeller-engine-repo=$out/maven"
+```
+
+`FLUTTER_CHECKOUT` debe apuntar al árbol aislado para esta variante. La firma y
+el JAR oficial se configuran como en el flujo regional. Para un control local
+equivalente, use `variant=region-v2` con su propio checkout. La CI asigna el
+mismo número de compilación a los dos paquetes y comprueba la identidad de los
+motores, certificado, ABI y contenido de las APK. El artefacto verificado
+`BStream-Android-Gradient-Exact-arm64` contiene ambas APK, las huellas en
+`identity.json` y los manifiestos de las dos compilaciones nativas y Maven.

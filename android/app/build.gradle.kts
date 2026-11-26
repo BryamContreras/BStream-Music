@@ -158,9 +158,17 @@ if (bstreamImpellerRepo != null) {
         "The local Impeller artifact must match the Flutter SDK engine revision."
     }
     val official = "1.0.0-$engineRevision"
-    val patched = "$official-bstream-region-v2"
+    val variant = providers.gradleProperty("bstream-impeller-engine-variant").orElse("region-v2").get()
+    require(variant in setOf("region-v2", "gradient-two-stop-exact")) { "Unknown BStream Impeller engine variant." }
+    val patched = "$official-bstream-$variant"
     val artifact = "arm64_v8a_$bstreamImpellerMode"
     val manifest = JsonSlurper().parse(manifestFile) as Map<*, *>
+    if (variant == "gradient-two-stop-exact") {
+        require(manifest["variant"] == variant &&
+            manifest["patchSha256"] == "84d25fcefe0930db9890ff9e518b16f1c39d2dc659db66c4f71a4555644fda2d") {
+            "The gradient candidate requires the verified v2 plus two-stop patch."
+        }
+    }
     require(manifest["engineRevision"] == engineRevision &&
         manifest["artifact"] == "com.bstream.engine:$artifact:$patched" &&
         (manifest["mode"] == bstreamImpellerMode || (bstreamImpellerMode == "profile" && manifest["mode"] == null))) {

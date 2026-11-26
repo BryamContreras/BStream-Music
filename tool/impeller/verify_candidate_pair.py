@@ -17,6 +17,7 @@ def output(*args):
 p=argparse.ArgumentParser()
 p.add_argument("--control",type=Path,required=True)
 p.add_argument("--candidate",type=Path,required=True)
+p.add_argument("--control-library",type=Path)
 p.add_argument("--library",type=Path,required=True)
 p.add_argument("--aapt2",type=Path,required=True)
 p.add_argument("--apksigner",type=Path,required=True)
@@ -58,6 +59,8 @@ with ZipFile(a.control) as base, ZipFile(a.candidate) as patched:
         assert abis=={"arm64-v8a"},abis
         assert not any("VkLayer_bstream_profile" in n for n in z.namelist())
     assert patched.read(engine)==a.library.read_bytes(),"Candidate has the wrong native engine"
+    if a.control_library is not None:
+        assert base.read(engine)==a.control_library.read_bytes(),"Control has the wrong native engine"
     assert base.read(engine)!=patched.read(engine),"Control and candidate use the same engine"
     assert base.read(aot)==patched.read(aot),"Control and candidate have different AOT Dart code"
     differences=sorted(n for n in payload_names(base) if base.read(n)!=patched.read(n))

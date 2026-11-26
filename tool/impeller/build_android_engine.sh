@@ -9,10 +9,18 @@ mode="$1"
 checkout="$(realpath "$2")"
 output="$(realpath -m "$3")"
 dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-patch="$dir/downsample-scissor.patch"
+variant="${BSTREAM_IMPELLER_VARIANT:-region-v2}"
+case "$variant" in
+  region-v2) patch="$dir/downsample-scissor.patch" ;;
+  gradient-two-stop-exact) patch="$dir/gradient-two-stop-exact-full.patch" ;;
+  *) echo "Unknown engine variant: $variant" >&2; exit 2 ;;
+esac
 revision=c197ca5199e9ee5661e865596c9c07294dfab51c
 test "$(git -C "$checkout" rev-parse HEAD)" = "$revision" || {
   echo "Expected Flutter framework revision $revision." >&2; exit 1;
+}
+git -C "$checkout" diff --cached --quiet || {
+  echo "The isolated engine checkout contains staged edits." >&2; exit 1;
 }
 if git -C "$checkout" apply --check "$patch" 2>/dev/null; then
   git -C "$checkout" diff --quiet || {
@@ -20,7 +28,13 @@ if git -C "$checkout" apply --check "$patch" 2>/dev/null; then
   }
   git -C "$checkout" apply "$patch"
 elif git -C "$checkout" apply --reverse --check "$patch" 2>/dev/null; then
-  git -C "$checkout" diff --no-ext-diff --binary | cmp -s - "$patch" || {
+  # Compare all expected contents, including new shader files absent from the
+  # real index. An engine checkout can contain untracked gclient dependencies.
+  scratch_index="$(mktemp -d)"
+  trap 'rm -f "$scratch_index/index"; rmdir "$scratch_index"' EXIT
+  GIT_INDEX_FILE="$scratch_index/index" git -C "$checkout" read-tree HEAD
+  GIT_INDEX_FILE="$scratch_index/index" git -C "$checkout" apply --cached "$patch"
+  GIT_INDEX_FILE="$scratch_index/index" git -C "$checkout" diff --quiet || {
     echo "The isolated checkout has edits beyond the exact native patch." >&2; exit 1;
   }
   echo "The native patch is already applied."
